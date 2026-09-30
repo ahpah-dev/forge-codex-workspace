@@ -108,6 +108,9 @@ async function startForge() {
 }
 
 function createMainWindow(url) {
+  const iconPath = app.isPackaged
+    ? path.join(process.resourcesPath, 'forge', 'icon.ico')
+    : path.join(__dirname, 'build', 'icon.ico');
   mainWindow = new BrowserWindow({
     width: 1440,
     height: 960,
@@ -116,7 +119,7 @@ function createMainWindow(url) {
     show: false,
     backgroundColor: '#fafaf8',
     title: 'Forge',
-    icon: app.isPackaged ? path.join(process.resourcesPath, 'forge', 'icon.ico') : path.join(__dirname, 'build', 'icon.ico'),
+    icon: iconPath,
     autoHideMenuBar: true,
     webPreferences: {
       contextIsolation: true,
@@ -125,6 +128,15 @@ function createMainWindow(url) {
       preload: path.join(__dirname, 'desktop-preload.cjs'),
     },
   });
+  if (process.platform === 'win32' && app.isPackaged) {
+    mainWindow.setAppDetails({
+      appId,
+      appIconPath: iconPath,
+      appIconIndex: 0,
+      relaunchCommand: `"${process.execPath}"`,
+      relaunchDisplayName: 'Forge',
+    });
+  }
   mainWindow.once('ready-to-show', () => mainWindow.show());
   mainWindow.webContents.setWindowOpenHandler(({ url: target }) => {
     if (/^https:\/\//i.test(target)) void shell.openExternal(target);
