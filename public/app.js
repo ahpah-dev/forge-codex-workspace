@@ -96,11 +96,14 @@ function createModelIcon(modelId, providerId = '') {
     label.setAttribute('font-family', 'Arial, sans-serif'); label.setAttribute('font-size', '15'); label.setAttribute('font-weight', '700');
     label.setAttribute('fill', 'currentColor'); label.textContent = 'N'; svg.append(label);
   } else if (tier === 'astra') {
-    appendPath('M12 2.1 14.65 9.35 21.9 12l-7.25 2.65L12 21.9l-2.65-7.25L2.1 12l7.25-2.65L12 2.1Z');
-    appendPath('M19.2 2.2 20 4.35l2.05.75-2.05.75-.8 2.1-.75-2.1-2.1-.75 2.1-.75.75-2.15Z');
+    appendPath('M10 3.5 12.2 9.8 18.5 12l-6.3 2.2L10 20.5l-2.2-6.3L1.5 12l6.3-2.2Z', 'none');
+    svg.lastChild.setAttribute('stroke', 'currentColor');
+    svg.lastChild.setAttribute('stroke-width', '1.5');
+    svg.lastChild.setAttribute('stroke-linejoin', 'round');
+    appendPath('M19.3 2.2 20.1 4.6 22.5 5.4 20.1 6.2 19.3 8.6 18.5 6.2 16.1 5.4 18.5 4.6Z');
   } else if (tier === 'sol') {
     const circle = document.createElementNS(ns, 'circle');
-    circle.setAttribute('cx', '12'); circle.setAttribute('cy', '12'); circle.setAttribute('r', '4.1');
+    circle.setAttribute('cx', '12'); circle.setAttribute('cy', '12'); circle.setAttribute('r', '4');
     circle.setAttribute('fill', 'none'); circle.setAttribute('stroke', 'currentColor'); circle.setAttribute('stroke-width', '1.8');
     svg.append(circle);
     const rays = document.createElementNS(ns, 'path');
@@ -108,8 +111,11 @@ function createModelIcon(modelId, providerId = '') {
     rays.setAttribute('fill', 'none'); rays.setAttribute('stroke', 'currentColor'); rays.setAttribute('stroke-width', '1.8'); rays.setAttribute('stroke-linecap', 'round');
     svg.append(rays);
   } else if (tier === 'luna') {
-    appendPath('M19.5 15.1A8.45 8.45 0 0 1 8.9 4.5 8.55 8.55 0 1 0 19.5 15.1Z');
-    appendPath('M18.1 3.1l.65 1.7 1.7.65-1.7.65-.65 1.7-.65-1.7-1.7-.65 1.7-.65.65-1.7Z');
+    appendPath('M20.1 14.8A8.6 8.6 0 0 1 9.2 3.9a8.7 8.7 0 1 0 10.9 10.9Z', 'none');
+    svg.lastChild.setAttribute('stroke', 'currentColor');
+    svg.lastChild.setAttribute('stroke-width', '1.7');
+    svg.lastChild.setAttribute('stroke-linejoin', 'round');
+    appendPath('M18.3 2.6 19 4.7 21.1 5.4 19 6.1 18.3 8.2 17.6 6.1 15.5 5.4 17.6 4.7Z');
   } else {
     return createOpenAIMark();
   }
@@ -742,13 +748,38 @@ function setModelPickerOpen(open, restoreFocus = false) {
   } else if (restoreFocus) trigger.focus({ preventScroll: true });
 }
 
+let effortCloseTimer;
+function positionEffortPopover() {
+  const popover = $('#effort-popover');
+  popover.style.setProperty('--effort-offset', '0px');
+  const anchor = $('#effort-control').getBoundingClientRect();
+  const bounds = { left: anchor.right - popover.offsetWidth, right: anchor.right };
+  const offset = bounds.left < 12 ? 12 - bounds.left : bounds.right > window.innerWidth - 12 ? window.innerWidth - 12 - bounds.right : 0;
+  popover.style.setProperty('--effort-offset', `${offset}px`);
+}
 function setEffortPopoverOpen(open, restoreFocus = false) {
   const popover = $('#effort-popover');
   const trigger = $('#effort-trigger');
-  popover.hidden = !open;
+  clearTimeout(effortCloseTimer);
+  popover.classList.remove('closing');
+  if (open) popover.hidden = false;
+  else if (!popover.hidden) {
+    popover.classList.add('closing');
+    effortCloseTimer = setTimeout(() => { popover.hidden = true; popover.classList.remove('closing'); }, 140);
+  }
+  popover.inert = !open;
   trigger.setAttribute('aria-expanded', String(Boolean(open)));
-  if (open) $('#effort-select').focus({ preventScroll: true });
+  if (open) { positionEffortPopover(); $('#effort-select').focus({ preventScroll: true }); }
   else if (restoreFocus) trigger.focus({ preventScroll: true });
+}
+window.addEventListener('resize', () => { if ($('#effort-trigger').getAttribute('aria-expanded') === 'true') positionEffortPopover(); });
+
+function renderEffortDetail(options, index) {
+  const blocks = $('#effort-blocks');
+  if (blocks.children.length !== options.length) blocks.replaceChildren(...options.map(() => document.createElement('span')));
+  [...blocks.children].forEach((block, position) => block.classList.toggle('active', position <= index));
+  const descriptions = { low: 'Quick answers and small, focused edits.', medium: 'Balanced depth for everyday tasks.', high: 'More depth for complex changes.', xhigh: 'Careful reasoning across larger tasks.', max: 'Thorough analysis for demanding work.', ultra: 'Maximum depth for the hardest coding tasks.', ultracode: 'Maximum depth for the hardest coding tasks.' };
+  $('#effort-description').textContent = descriptions[options[index]] || 'Choose the depth of reasoning for this task.';
 }
 
 function formatEffortLabel(effort) {
@@ -776,6 +807,7 @@ function renderEfforts() {
   $('#effort-current-label').textContent = formatEffortLabel(state.effort);
   $('#effort-popover-value').textContent = formatEffortLabel(state.effort);
   select.setAttribute('aria-valuetext', formatEffortLabel(state.effort));
+  renderEffortDetail(options, index);
   localStorage.setItem('forge.effort', state.effort);
 }
 
@@ -790,6 +822,7 @@ function updateEffortFromSlider() {
   $('#effort-current-label').textContent = label;
   $('#effort-popover-value').textContent = label;
   slider.setAttribute('aria-valuetext', label);
+  renderEffortDetail(options, Number(slider.value));
   slider.style.setProperty('--effort-progress', (options.length > 1 ? Number(slider.value) / (options.length - 1) * 100 : 0) + '%');
   localStorage.setItem('forge.effort', effort);
 }
@@ -2685,7 +2718,7 @@ $('#provider-list').addEventListener('click', (event) => {
   if (edit) editProvider(edit.dataset.providerEdit);
   else if (remove) void removeProvider(remove.dataset.providerRemove);
 });
-$('#effort-trigger').addEventListener('click', () => setEffortPopoverOpen($('#effort-popover').hidden));
+$('#effort-trigger').addEventListener('click', () => setEffortPopoverOpen($('#effort-trigger').getAttribute('aria-expanded') !== 'true'));
 $('#model-options').addEventListener('click', (event) => {
   const option = event.target.closest('[data-model-id]');
   if (!option) return;

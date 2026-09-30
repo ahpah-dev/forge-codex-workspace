@@ -116,7 +116,9 @@
                     <button class="effort-trigger" id="effort-trigger" type="button" aria-expanded="false" aria-controls="effort-popover" title="Choose reasoning effort"><span>Reasoning</span><strong id="effort-current-label">Medium</strong><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg></button>
                     <div class="effort-popover" id="effort-popover" hidden>
                       <div class="effort-popover-heading"><span>Reasoning effort</span><strong id="effort-popover-value">Medium</strong></div>
-                      <div class="effort-slider-row"><span id="effort-min-label">Low</span><input id="effort-select" class="effort-slider" type="range" min="0" max="5" step="1" value="1" aria-label="Reasoning effort" aria-valuetext="Medium" title="Reasoning effort"><span id="effort-max-label">Ultracode</span></div>
+                      <div class="effort-track-shell"><div class="effort-blocks" id="effort-blocks" aria-hidden="true"></div><input id="effort-select" class="effort-slider" type="range" min="0" max="5" step="1" value="1" aria-label="Reasoning effort" aria-valuetext="Medium" title="Reasoning effort"></div>
+                      <div class="effort-endpoints"><span id="effort-min-label">Low</span><span id="effort-max-label">Ultracode</span></div>
+                      <div class="effort-description" id="effort-description">Balanced depth for everyday tasks.</div>
                       <div class="effort-scale-hint">Higher effort uses more of your Codex limits.</div>
                     </div>
                   </div>

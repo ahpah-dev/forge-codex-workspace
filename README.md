@@ -2,11 +2,25 @@
 
 Forge is a local coding workspace for Codex. It includes a project browser, file changes, terminal activity, approval prompts, and live agent task summaries. It connects to the Codex account already signed in on this Windows user profile and uses the model catalog and rate limits available to that account.
 
+## Screenshots
+
+Screenshots use a local demo project with generic account details.
+
+![Forge workspace](docs/screenshots/forge-home.png)
+
+| Reasoning controls | Model selection |
+| --- | --- |
+| ![Block slider with effort descriptions](docs/screenshots/forge-reasoning.png) | ![Model search and tier icons](docs/screenshots/forge-models.png) |
+
+| Working tree diffs | Assigning a subagent |
+| --- | --- |
+| ![File changes with line totals and diff preview](docs/screenshots/forge-changes.png) | ![Assign a named subagent with a role and task scope](docs/screenshots/forge-assign-agent.png) |
+
 ## Windows app
 
 Download the latest Windows x64 installer from [GitHub Releases](https://github.com/davidegeric-cloud/forge-codex-workspace/releases/latest). Run the installer, then launch Forge from the Start menu or desktop shortcut. Sign in to Codex once in the Codex app or Codex CLI; Forge uses that saved local account automatically.
 
-To build the installer yourself, use Node.js 18 or newer on Windows x64, run `npm install`, then `npm run dist:win`. The installer is written to `release/Forge-Setup-1.0.6-x64.exe`. The desktop app bundles its Codex runtime and does not need a global Node.js install.
+To build the installer yourself, use Node.js 18 or newer on Windows x64, run `npm install`, then `npm run dist:win`. The installer is written to `release/Forge-Setup-1.0.7-x64.exe`. The desktop app bundles its Codex runtime and does not need a global Node.js install.
 
 ## Start from source
 
