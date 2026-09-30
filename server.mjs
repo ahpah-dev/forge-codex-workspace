@@ -1134,7 +1134,7 @@ const httpServer = createServer(async (req, res) => {
         if (!key) throw new Error(`Add your ${provider.name} API key in Settings.`);
         router = createChatProviderRouter({ provider: { ...provider, baseUrl: normalizeProviderBaseUrl(provider.baseUrl) }, model: input.model, key });
       }
-      await bridgeResponses({ input, res, router, signal: AbortSignal.any([controller.signal, AbortSignal.timeout(180000)]) });
+      await bridgeResponses({ input, res, router, signal: AbortSignal.any([controller.signal, AbortSignal.timeout(600000)]) });
     } catch (error) {
       if (!controller.signal.aborted) console.error(JSON.stringify({ scope: 'provider-inference', provider: providerBridge?.[1] || FREE_PROVIDER_ID, errorType: error.name || 'Error' }));
       if (!res.headersSent) return json(res, 502, { error: { code: 'routing_unavailable', message: error.message } });

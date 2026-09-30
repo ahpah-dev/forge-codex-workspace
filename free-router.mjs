@@ -1,3 +1,5 @@
+import { createChatProviderRouter } from './responses-bridge.mjs';
+
 const OPENROUTER = 'https://openrouter.ai/api/v1';
 const NVIDIA = 'https://integrate.api.nvidia.com/v1';
 export const FREE_PROVIDER_ID = 'forge-free';
@@ -67,9 +69,10 @@ export function createFreeRouter({ getKey, fetchImpl = fetch, onRoute = () => {}
     cache.set(provider, { models, expires: Date.now() + 10 * 60 * 1000 });
     return models;
   }
-  async function openCompletion(request, signal) {
+  async function openCompletion(request, signal, { maxTokens = 16384, route: previousRoute } = {}) {
     const failures = [];
     for (const provider of ['openrouter', 'nvidia']) {
+      if (previousRoute && provider !== previousRoute.provider) continue;
       if (provider === 'openrouter' && openrouterBlockedUntil > Date.now()) continue;
       let models;
       try { models = await catalog(provider, { signal }); }
@@ -81,23 +84,27 @@ export function createFreeRouter({ getKey, fetchImpl = fetch, onRoute = () => {}
       }
       let tried = 0;
       for (const model of models) {
+        if (previousRoute && model.id !== previousRoute.model) continue;
         if ((cooldowns.get(`${provider}:${model.id}`) || 0) > Date.now()) continue;
         if (provider === 'openrouter' && Number(model.context_length || Infinity) < JSON.stringify(request.messages).length / 3 + 4096) continue;
         if (++tried > 3) break;
         const key = await getKey(provider);
         const base = provider === 'openrouter' ? OPENROUTER : NVIDIA;
-        const body = { ...request, model: model.id, stream: true, max_tokens: Math.min(8192, Number(model.top_provider?.max_completion_tokens || 8192)) };
+        const body = { ...request, model: model.id, stream: true, max_tokens: Math.min(maxTokens, Number(model.top_provider?.max_completion_tokens || 32768)) };
         if (provider === 'nvidia') delete body.parallel_tool_calls;
         if (provider === 'openrouter') body.provider = { max_price: { prompt: 0, completion: 0 }, require_parameters: true, allow_fallbacks: true };
         let response;
         try {
-          response = await fetchImpl(`${base}/chat/completions`, {
+          response = provider === 'nvidia'
+            ? (await createChatProviderRouter({ provider: { id: 'nvidia', name: 'NVIDIA NIM', baseUrl: base }, model: model.id, key, fetchImpl }).openCompletion(request, signal, { maxTokens })).response
+            : await fetchImpl(`${base}/chat/completions`, {
             method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', ...(provider === 'openrouter' ? { 'X-OpenRouter-Title': 'Forge' } : {}) },
             body: JSON.stringify(body), signal,
           });
         } catch (error) {
           if (signal?.aborted) throw error;
-          failures.push(`${provider}: connection unavailable`);
+          if ([401, 403, 402, 429].includes(error.status)) throw error;
+          failures.push(error.status ? error.message : `${provider}: connection unavailable`);
           cooldowns.set(`${provider}:${model.id}`, Date.now() + 60000);
           continue;
         }

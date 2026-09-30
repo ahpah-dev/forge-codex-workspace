@@ -66,25 +66,41 @@ export function providerApiFormat(provider) {
 }
 
 export function createChatProviderRouter({ provider, model, key, fetchImpl = fetch }) {
+  let tokenLimit = 32768;
   return {
-    async openCompletion(request, signal) {
-      const body = { ...request, model, stream: true, max_tokens: 8192 };
+    async openCompletion(request, signal, { maxTokens = 16384 } = {}) {
+      const body = { ...request, model, stream: true, max_tokens: Math.min(maxTokens, tokenLimit) };
       // parallel_tool_calls is optional and is not accepted by every NIM model.
       delete body.parallel_tool_calls;
-      const response = await fetchImpl(`${provider.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
+      const invoke = () => fetchImpl(`${provider.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
         method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', Accept: 'text/event-stream' },
         body: JSON.stringify(body), signal,
       });
+      let response = await invoke();
+      let rejectedDetail;
+      if ([400, 422].includes(response.status)) {
+        rejectedDetail = await response.json().catch(() => ({}));
+        const description = JSON.stringify(rejectedDetail);
+        const match = description.match(/max_tokens[\s\S]{0,180}?(?:less than or equal to|at most|maximum(?: is| of)?|<=)\s*(\d+)/i)
+          || description.match(/max_tokens[\s\S]{0,120}?between\s*\d+\s*and\s*(\d+)/i);
+        const maximum = Number(match?.[1]);
+        if (maximum >= 256 && maximum < body.max_tokens) {
+          tokenLimit = maximum;
+          body.max_tokens = maximum;
+          response = await invoke();
+          rejectedDetail = undefined;
+        }
+      }
       if (!response.ok || response.status === 202) {
-        const detail = await response.json().catch(() => ({}));
+        const detail = rejectedDetail || await response.json().catch(() => ({}));
         const explanation = String(detail.error?.message || detail.message || (typeof detail.detail === 'string' ? detail.detail : '')).replaceAll(key, '[redacted]').slice(0, 500);
         const hint = [401, 403].includes(response.status) ? 'Check your API key and model access in Settings.'
           : response.status === 429 ? 'The provider rate limit was reached. Wait before retrying.'
             : [400, 422].includes(response.status) ? 'Choose a model that supports tool calling and this message type.'
               : response.status === 202 ? 'The provider queued this request instead of returning a live stream. Retry with a streaming model.' : '';
-        throw new Error(`${provider.name} returned HTTP ${response.status}. ${hint}${explanation ? ' ' + explanation : ''}`.trim());
+        throw Object.assign(new Error(`${provider.name} returned HTTP ${response.status}. ${hint}${explanation ? ' ' + explanation : ''}`.trim()), { status: response.status });
       }
-      return { response, route: { provider: provider.id, model, name: model } };
+      return { response, route: { provider: provider.id, model, name: model }, maxTokens: body.max_tokens };
     },
     rejectRoute(_route, error) { throw error; },
   };
@@ -111,7 +127,7 @@ export async function bridgeResponses({ input, res, router, signal }) {
   const { request, toolMap } = toChatRequest(input);
   let route, chunks, firstChunk;
   for (let attempt = 0; attempt < 3; attempt++) {
-    const opened = await router.openCompletion(request, signal);
+    const opened = await router.openCompletion(request, signal, { maxTokens: 16384 });
     route = opened.route;
     if (!opened.response.body) throw new Error('The routed provider did not return a response stream.');
     chunks = chatChunks(opened.response.body);
@@ -153,30 +169,56 @@ export async function bridgeResponses({ input, res, router, signal }) {
   const keepalive = setInterval(() => { if (!res.destroyed) res.write(': working\n\n'); }, 15000);
   try {
     async function* withFirst() { yield firstChunk; yield* chunks; }
-    for await (const chunk of withFirst()) {
-      if (chunk.error) throw new Error(String(chunk.error.message || 'The model stream failed.'));
-      if (chunk.usage) usage = chunk.usage;
-      const choice = chunk.choices?.[0];
-      if (!choice) continue;
-      if (choice.finish_reason) finishReason = choice.finish_reason;
-      const delta = choice.delta || {};
-      if (delta.content) {
-        if (!message) {
-          message = { id: 'msg_' + randomUUID(), type: 'message', role: 'assistant', status: 'in_progress', content: [{ type: 'output_text', text: '', annotations: [] }] };
-          output.push(message);
-          send('response.output_item.added', { output_index: output.indexOf(message), item: message });
-          send('response.content_part.added', { item_id: message.id, output_index: output.indexOf(message), content_index: 0, part: { type: 'output_text', text: '', annotations: [] } });
+    let currentChunks = withFirst();
+    let currentRequest = request;
+    for (let recovery = 0; ; recovery += 1) {
+      finishReason = null;
+      calls.clear();
+      let segmentText = '';
+      let segmentUsage = {};
+      for await (const chunk of currentChunks) {
+        if (chunk.error) throw new Error(String(chunk.error.message || 'The model stream failed.'));
+        if (chunk.usage) segmentUsage = chunk.usage;
+        const choice = chunk.choices?.[0];
+        if (!choice) continue;
+        if (choice.finish_reason) finishReason = choice.finish_reason;
+        const delta = choice.delta || {};
+        if (delta.content) {
+          segmentText += delta.content;
+          if (!message) {
+            message = { id: 'msg_' + randomUUID(), type: 'message', role: 'assistant', status: 'in_progress', content: [{ type: 'output_text', text: '', annotations: [] }] };
+            output.push(message);
+            send('response.output_item.added', { output_index: output.indexOf(message), item: message });
+            send('response.content_part.added', { item_id: message.id, output_index: output.indexOf(message), content_index: 0, part: { type: 'output_text', text: '', annotations: [] } });
+          }
+          message.content[0].text += delta.content;
+          send('response.output_text.delta', { item_id: message.id, output_index: output.indexOf(message), content_index: 0, delta: delta.content });
         }
-        message.content[0].text += delta.content;
-        send('response.output_text.delta', { item_id: message.id, output_index: output.indexOf(message), content_index: 0, delta: delta.content });
+        for (const call of delta.tool_calls || []) {
+          let pending = calls.get(call.index);
+          if (!pending) { pending = { id: call.id, name: '', arguments: '' }; calls.set(call.index, pending); }
+          if (call.id) pending.id = call.id;
+          if (call.function?.name) pending.name += call.function.name;
+          if (call.function?.arguments) pending.arguments += call.function.arguments;
+        }
       }
-      for (const call of delta.tool_calls || []) {
-        let pending = calls.get(call.index);
-        if (!pending) { pending = { id: call.id, name: '', arguments: '' }; calls.set(call.index, pending); }
-        if (call.id) pending.id = call.id;
-        if (call.function?.name) pending.name += call.function.name;
-        if (call.function?.arguments) pending.arguments += call.function.arguments;
-      }
+      for (const key of ['prompt_tokens', 'completion_tokens', 'total_tokens']) usage[key] = (usage[key] || 0) + Number(segmentUsage[key] || 0);
+      if (finishReason !== 'length') break;
+      if (recovery >= 2) throw new Error(`${route.name} reached its output limit after two automatic recovery attempts. Partial text was retained; unfinished tool calls were not executed. Retry with a smaller task or a model with a larger output budget.`);
+      const truncatedTools = calls.size > 0;
+      const continuation = truncatedTools
+        ? 'The previous inference reached its output limit while generating tool arguments. None of the tool calls from that truncated inference were executed. Regenerate the complete necessary tool call, using smaller file edits and shorter tool arguments. Do not repeat previous commentary. Use the original task and existing tool results as context.'
+        : segmentText
+          ? 'Continue exactly where your previous response was cut off by the output limit. Do not repeat the text already shown. Finish the remaining work, keeping reasoning concise and splitting large file edits into smaller tool calls.'
+          : 'Your previous inference exhausted its output budget before producing an answer or complete tool call. Keep reasoning concise and proceed with the task. Use smaller individual file edits.';
+      currentRequest = { ...currentRequest, messages: [...currentRequest.messages,
+        ...(segmentText ? [{ role: 'assistant', content: segmentText }] : []),
+        { role: 'user', content: continuation },
+      ] };
+      const opened = await router.openCompletion(currentRequest, signal, { maxTokens: 32768, route });
+      route = opened.route;
+      if (!opened.response.body) throw new Error('The provider did not return a recovery stream.');
+      currentChunks = chatChunks(opened.response.body);
     }
     if (!finishReason) throw new Error(`${route.name} disconnected before finishing. Partial output was retained; no tools were replayed.`);
     if (message) {
@@ -185,7 +227,7 @@ export async function bridgeResponses({ input, res, router, signal }) {
       send('response.content_part.done', { item_id: message.id, output_index: output.indexOf(message), content_index: 0, part: message.content[0] });
       send('response.output_item.done', { output_index: output.indexOf(message), item: message });
     }
-    if (!['stop', 'tool_calls', 'function_call'].includes(finishReason)) throw new Error(`The routed model stopped with ${finishReason}. Its partial output was retained.`);
+    if (!['stop', 'tool_calls', 'function_call'].includes(finishReason)) throw new Error(`${route.name} stopped with ${finishReason}. Partial output was retained; incomplete tool calls were not executed.`);
     for (const call of calls.values()) {
       const tool = toolMap.get(call.name);
       if (!tool || !call.id) throw new Error('The model returned an unknown or incomplete tool call.');
