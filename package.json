@@ -2,7 +2,7 @@
   "name": "forge-codex-workspace",
   "version": "1.0.7",
   "license": "MIT",
-  "description": "Forge local desktop coding workspace connected to Codex",
+  "description": "Forge desktop AI workspace for Codex, Claude Code, and external APIs",
   "author": "Forge",
   "private": true,
   "type": "module",

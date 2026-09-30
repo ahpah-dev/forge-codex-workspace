@@ -2,7 +2,7 @@
 
 [Visit the Forge website](https://davidegeric-cloud.github.io/forge-codex-workspace/) · [Download for Windows](https://github.com/davidegeric-cloud/forge-codex-workspace/releases/latest) · [MIT license](LICENSE)
 
-Forge is a local coding workspace for Codex. It includes a project browser, file changes, terminal activity, approval prompts, and live agent task summaries. It connects to the Codex account already signed in on this Windows user profile and uses the model catalog and rate limits available to that account.
+Forge is a free, MIT-licensed desktop AI workspace for Codex, Claude Code, and external APIs such as OpenRouter and NVIDIA. It includes a project browser, file changes, terminal activity, approval prompts, and live agent task summaries. Codex uses the account already signed in on this Windows user profile and its standard model catalog and rate limits. Claude Code and custom providers use their own accounts and access.
 
 ## Screenshots
 
