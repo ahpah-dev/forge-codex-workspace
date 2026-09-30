@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.14
+
+- Added image attachments to the composer, including paste-from-clipboard, previews, and removal controls.
+- Send up to four PNG, JPEG, WebP, or GIF images to Codex, Claude, and compatible providers (up to 9 MB per message).
+
 ## 1.0.13
 
 - Restored the OpenAI mark's theme colors in the welcome screen and activity spinner.

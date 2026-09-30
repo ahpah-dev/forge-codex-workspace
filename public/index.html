@@ -99,9 +99,12 @@
           <div class="composer-dock" id="composer-dock">
             <div class="composer-shell">
               <div class="message-edit-banner" id="message-edit-banner" hidden><span>Editing a previous message · sending creates a branch</span><button type="button" id="cancel-message-edit" aria-label="Cancel editing">Cancel</button></div>
+              <div class="image-attachment-tray" id="image-attachment-tray" aria-label="Image attachments" hidden></div>
               <textarea id="prompt-input" rows="3" placeholder="Find a small todo in the codebase and do it" aria-label="Message Codex"></textarea>
+              <input id="image-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden>
               <div class="composer-bottom">
                 <div class="composer-controls">
+                  <button class="attach-image-button" id="attach-image" type="button" aria-label="Attach images" title="Attach images, or paste an image from the clipboard"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9" r="1.5"/><path d="m21 15-5-5L5 20"/></svg></button>
                   <div class="model-picker" id="model-picker">
                     <button class="model-picker-trigger" id="model-picker-trigger" type="button" aria-haspopup="listbox" aria-expanded="false" aria-controls="model-options" title="Choose a model" disabled>
                       <span class="model-picker-mark tier-default" id="model-picker-mark" aria-hidden="true"></span>

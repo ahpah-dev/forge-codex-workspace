@@ -573,7 +573,10 @@ async function startCodexTask(input, cwd, { announceContinuation, signal } = {})
   turnRequests.set(threadId, { ...input, providerId, cwd, threadId });
   turnErrors.delete(threadId);
   const turn = await codex.rpc('turn/start', {
-    threadId, cwd, input: [{ type: 'text', text: input.text }], model: model || undefined, effort,
+    threadId, cwd, input: [
+      ...(input.text ? [{ type: 'text', text: input.text }] : []),
+      ...(input.images || []).map((image) => ({ type: 'image', url: image.dataUrl, detail: 'auto' })),
+    ], model: model || undefined, effort,
     collaborationMode: { mode: input.planningMode ? 'plan' : 'default', settings: { model, reasoning_effort: effort, developer_instructions: null } },
     approvalPolicy,
     sandboxPolicy: readOnly ? { type: 'readOnly', networkAccess: false } : unrestricted ? { type: 'dangerFullAccess' } : { type: 'workspaceWrite', writableRoots: [cwd], networkAccess: false },
@@ -704,12 +707,33 @@ function requireSession(req) {
 
 async function bodyJson(req) {
   let text = '';
+  const maxLength = req.url?.startsWith('/api/messages') ? 14 * 1024 * 1024 : 1024 * 1024;
   for await (const chunk of req) {
     text += chunk;
-    if (text.length > 1024 * 1024) throw new Error('Request body is too large.');
+    if (text.length > maxLength) throw new Error(req.url?.startsWith('/api/messages') ? 'Request body is too large. Keep attached images under 9 MB total.' : 'Request body is too large.');
   }
   if (!text) return {};
   try { return JSON.parse(text); } catch { throw new Error('Request body must be valid JSON.'); }
+}
+
+function normalizeImageAttachments(value) {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 4) throw new Error('Attach up to four images per message.');
+  const allowedTypes = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
+  let totalBytes = 0;
+  return value.map((image) => {
+    const mediaType = String(image?.mediaType || '').toLowerCase();
+    if (!allowedTypes.has(mediaType)) throw new Error('Attach PNG, JPEG, WebP, or GIF images.');
+    const base64 = String(image?.base64 || '');
+    if (!base64 || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(base64)) throw new Error('An attached image could not be read. Try adding it again.');
+    const bytes = Buffer.from(base64, 'base64');
+    if (!bytes.length || bytes.toString('base64') !== base64) throw new Error('An attached image is invalid. Try adding it again.');
+    if (bytes.length > 5 * 1024 * 1024) throw new Error('Each image must be 5 MB or smaller.');
+    totalBytes += bytes.length;
+    if (totalBytes > 9 * 1024 * 1024) throw new Error('Images must be 9 MB or smaller in total.');
+    const name = path.basename(String(image.name || 'image')).replace(/[\u0000-\u001f]/g, '').slice(0, 160) || 'image';
+    return { name, mediaType, base64, dataUrl: `data:${mediaType};base64,${base64}` };
+  });
 }
 
 async function readThreadHistory(threadId) {
@@ -720,7 +744,11 @@ async function readThreadHistory(threadId) {
     for (const item of turn.items || []) {
       if (item.type === 'userMessage') {
         const content = (item.content || []).filter((part) => part.type === 'text').map((part) => part.text).join('\n');
-        if (content) messages.push({ id: item.id, turnId: turn.id, role: 'user', text: content });
+        const images = (item.content || []).filter((part) => part.type === 'image').map((part, index) => {
+          const dataUrl = part.image_url || part.url || (part.data ? `data:${part.media_type || part.mediaType || 'image/png'};base64,${part.data}` : '');
+          return typeof dataUrl === 'string' && dataUrl.startsWith('data:image/') ? { name: `image-${index + 1}`, dataUrl } : null;
+        }).filter(Boolean);
+        if (content || images.length) messages.push({ id: item.id, turnId: turn.id, role: 'user', text: content, images });
       } else if (item.type === 'agentMessage') {
         messages.push({ id: item.id, turnId: turn.id, role: 'assistant', text: item.text || '' });
       } else if (item.type === 'plan') {
@@ -977,13 +1005,15 @@ async function handleApi(req, res, url) {
       if (route === '/api/messages') {
         if (!activeWorkspace) throw new Error('Open a workspace folder before starting a task.');
         const text = String(input.text || '').trim();
-        if (!text) throw new Error('Write a prompt before sending.');
+        const images = normalizeImageAttachments(input.images);
+        if (!text && !images.length) throw new Error('Write a prompt or attach an image before sending.');
         if (text.length > 100000) throw new Error('Prompts are limited to 100,000 characters.');
         const providerId = String(input.providerId || 'openai');
         if (providerId === 'anthropic') {
           const result = await anthropic.startTurn({
             threadId: String(input.threadId || ''),
             text,
+            images,
             model: String(input.providerModel || ''),
             cwd: activeWorkspace,
             readOnly: Boolean(input.readOnly),
@@ -992,7 +1022,7 @@ async function handleApi(req, res, url) {
           });
           return json(res, 200, { ...result, providerId });
         }
-        let task = { ...input, text, providerId };
+        let task = { ...input, text, images, providerId };
         let continuedFrom = null;
         if (providerId === 'openai' && settings.freeRouting.enabled && settings.freeRouting.codexFallback) {
           const limits = await codex.rpc('account/rateLimits/read', {}).catch(() => null);

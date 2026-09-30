@@ -291,7 +291,7 @@ export function createAnthropicProvider({ dataRoot, publish, executable = 'claud
     });
   }
 
-  async function runTurn(session, turnId, text, model, readOnly) {
+  async function runTurn(session, turnId, text, model, readOnly, images = []) {
     const assistantId = 'anthropic-assistant-' + turnId;
     const assistant = { id: assistantId, turnId, role: 'assistant', text: '', pending: true };
     session.messages.push(assistant);
@@ -320,7 +320,22 @@ export function createAnthropicProvider({ dataRoot, publish, executable = 'claud
       };
       if (process.env.CLAUDE_CLI) options.pathToClaudeCodeExecutable = process.env.CLAUDE_CLI;
 
-      const response = query({ prompt: text, options });
+      const prompt = images.length ? (async function* () {
+        const content = [];
+        if (text) content.push({ type: 'text', text });
+        for (const image of images) content.push({
+          type: 'image',
+          source: { type: 'base64', media_type: image.mediaType, data: image.base64 },
+        });
+        yield {
+          type: 'user',
+          message: { role: 'user', content },
+          parent_tool_use_id: null,
+          session_id: session.anthropicSessionId,
+          uuid: randomUUID(),
+        };
+      })() : text;
+      const response = query({ prompt, options });
       for await (const message of response) {
         if (message.type === 'system' && message.subtype === 'init') {
           session.anthropicSessionId = message.session_id || session.anthropicSessionId;
@@ -448,7 +463,7 @@ export function createAnthropicProvider({ dataRoot, publish, executable = 'claud
     }
   }
 
-  async function startTurn({ threadId, text, model, cwd, readOnly = false, planningMode = false, askBeforeExternalActions = true }) {
+  async function startTurn({ threadId, text, images = [], model, cwd, readOnly = false, planningMode = false, askBeforeExternalActions = true }) {
     if (planningMode) {
       readOnly = true;
       text = `Planning mode: inspect the project and produce an actionable implementation plan with steps, affected files, tradeoffs, and validation. Ask clarifying questions when needed. Do not edit files or implement the plan.\n\n${text}`;
@@ -469,7 +484,7 @@ export function createAnthropicProvider({ dataRoot, publish, executable = 'claud
       const now = Date.now();
       session = {
         id: THREAD_PREFIX + randomUUID(),
-        name: summarize(text, 68) || 'New Claude task',
+        name: summarize(text, 68) || (images.length ? 'Review images' : 'New Claude task'),
         cwd,
         modelProvider: 'anthropic',
         anthropicSessionId: randomUUID(),
@@ -483,8 +498,8 @@ export function createAnthropicProvider({ dataRoot, publish, executable = 'claud
       sessions.unshift(session);
     }
     session.askBeforeExternalActions = askBeforeExternalActions !== false;
-    session.name = session.name || summarize(text, 68) || 'Claude task';
-    session.messages.push({ id: 'user-' + turnId, turnId, role: 'user', text });
+    session.name = session.name || summarize(text, 68) || (images.length ? 'Review images' : 'Claude task');
+    session.messages.push({ id: 'user-' + turnId, turnId, role: 'user', text, images: images.map(({ name, mediaType, base64 }) => ({ name, mediaType, base64 })) });
     session.updatedAt = Date.now();
     if (firstTurn) await saveSessions();
 
@@ -493,7 +508,7 @@ export function createAnthropicProvider({ dataRoot, publish, executable = 'claud
     const controller = activeTurns.get(session.id).controller;
     queueMicrotask(() => {
       if (activeTurns.get(session.id)?.turnId !== turnId) return;
-      void runTurn(session, turnId, text, model, readOnly);
+      void runTurn(session, turnId, text, model, readOnly, images);
     });
     return { threadId: session.id, turnId };
   }

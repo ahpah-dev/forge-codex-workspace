@@ -22,6 +22,7 @@ const state = {
   deletingThreads: new Set(),
   historyVisibleCount: 60,
   messages: [],
+  pendingImages: [],
   messageEditTarget: null,
   activeTurnId: null,
   activityStatus: 'Starting task',
@@ -1073,7 +1074,7 @@ function renderSurface() {
   $('#welcome-view').hidden = active;
   $('#conversation-view').hidden = !active;
   if (active) {
-    $('#conversation-title').textContent = state.threadName || (state.messages.find((message) => message.role === 'user')?.text.slice(0, 72) || 'New task');
+    $('#conversation-title').textContent = state.threadName || (state.messages.find((message) => message.role === 'user')?.text.slice(0, 72) || 'Image request');
     $('#conversation-subtitle').textContent = state.workspace?.path || '';
     $('#thread-loading-note').hidden = !state.threadLoading;
     renderMessages(enteringConversation);
@@ -1095,6 +1096,7 @@ function renderMessageEditBanner() {
 function beginMessageEdit(message) {
   if (state.isBusy || state.threadLoading) return;
   state.messageEditTarget = { id: message.id, turnId: message.turnId || null, text: message.text };
+  setPendingImages(message.images || []);
   $('#prompt-input').value = message.text;
   resizeComposer();
   renderMessageEditBanner();
@@ -1105,6 +1107,7 @@ function beginMessageEdit(message) {
 function cancelMessageEdit() {
   state.messageEditTarget = null;
   $('#prompt-input').value = '';
+  setPendingImages([]);
   resizeComposer();
   renderMessageEditBanner();
 }
@@ -1118,17 +1121,88 @@ async function openBranchBeforeMessage(message) {
   void refreshState({ quiet: true });
 }
 
+const IMAGE_FILE_LIMIT = 5 * 1024 * 1024;
+const IMAGE_TOTAL_LIMIT = 9 * 1024 * 1024;
+const IMAGE_COUNT_LIMIT = 4;
+const IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
+
+function imageFileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.addEventListener('load', () => resolve(String(reader.result || '')));
+    reader.addEventListener('error', () => reject(new Error(`Could not read ${file.name || 'that image'}.`)));
+    reader.readAsDataURL(file);
+  });
+}
+
+function renderImageAttachmentTray() {
+  const tray = $('#image-attachment-tray');
+  tray.replaceChildren();
+  tray.hidden = state.pendingImages.length === 0;
+  for (const image of state.pendingImages) {
+    const item = document.createElement('div');
+    item.className = 'image-attachment';
+    const preview = document.createElement('img');
+    preview.src = imageDataUrl(image);
+    preview.alt = '';
+    const name = document.createElement('span');
+    name.className = 'image-attachment-name';
+    name.textContent = image.name;
+    const remove = document.createElement('button');
+    remove.className = 'image-attachment-remove';
+    remove.type = 'button';
+    remove.setAttribute('aria-label', `Remove ${image.name}`);
+    remove.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 4 8 8m0-8-8 8"/></svg>';
+    remove.addEventListener('click', () => {
+      state.pendingImages = state.pendingImages.filter((entry) => entry.id !== image.id);
+      renderImageAttachmentTray();
+    });
+    item.append(preview, name, remove);
+    tray.append(item);
+  }
+}
+
+function setPendingImages(images = []) {
+  state.pendingImages = (Array.isArray(images) ? images : []).map((image) => ({
+    id: image.id || crypto.randomUUID(),
+    name: String(image.name || 'image'),
+    mediaType: imageMediaType(image),
+    size: Number(image.size || 0),
+    dataUrl: imageDataUrl(image),
+  })).filter((image) => image.dataUrl);
+  renderImageAttachmentTray();
+}
+
+async function addImageFiles(files) {
+  const candidates = Array.from(files || []);
+  if (!candidates.length) return;
+  for (const file of candidates) {
+    if (!IMAGE_TYPES.has(file.type)) { showToast('Choose a PNG, JPEG, WebP, or GIF image.', 'error'); continue; }
+    if (file.size > IMAGE_FILE_LIMIT) { showToast(`${file.name} is over the 5 MB image limit.`, 'error'); continue; }
+    if (state.pendingImages.length >= IMAGE_COUNT_LIMIT) { showToast('Attach up to four images per message.', 'error'); break; }
+    const total = state.pendingImages.reduce((sum, image) => sum + image.size, 0);
+    if (total + file.size > IMAGE_TOTAL_LIMIT) { showToast('Keep attached images under 9 MB total.', 'error'); break; }
+    try {
+      const dataUrl = await imageFileToDataUrl(file);
+      state.pendingImages.push({ id: crypto.randomUUID(), name: file.name || 'image', mediaType: file.type, size: file.size, dataUrl });
+      renderImageAttachmentTray();
+    } catch (error) {
+      showToast(error.message, 'error');
+    }
+  }
+}
+
 async function retryUserMessage(message) {
   if (state.isBusy || state.threadLoading) return;
   if (!message.turnId) {
-    await sendMessage(message.text, { replaceMessageId: message.id });
+    await sendMessage(message.text, { replaceMessageId: message.id, imagesOverride: message.images || [] });
     return;
   }
   try {
     state.threadLoading = true;
     renderSurface();
     await openBranchBeforeMessage(message);
-    await sendMessage(message.text);
+    await sendMessage(message.text, { imagesOverride: message.images || [] });
   } catch (error) {
     state.threadLoading = false;
     renderSurface();
@@ -1973,11 +2047,14 @@ function renderMessage(message) {
       access.textContent = delegation.readOnly ? 'Read only' : 'Workspace permissions';
       user.append(kicker, heading, task, access);
     } else {
-      const body = document.createElement('div');
-      body.className = 'user-message-content';
-      body.textContent = message.text;
-      user.append(body);
+      if (message.text) {
+        const body = document.createElement('div');
+        body.className = 'user-message-content';
+        body.textContent = message.text;
+        user.append(body);
+      }
     }
+    appendMessageImages(user, message.images);
     if (!state.threadLoading) {
       const actions = document.createElement('div');
       actions.className = 'user-message-actions';
@@ -2037,6 +2114,32 @@ function renderMessage(message) {
   } else content.innerHTML = message.text ? renderMarkdown(message.text) : '';
   wrapper.append(content);
   return wrapper;
+}
+
+function imageDataUrl(image) {
+  if (typeof image?.dataUrl === 'string' && image.dataUrl.startsWith('data:image/')) return image.dataUrl;
+  const mediaType = String(image?.mediaType || image?.mimeType || 'image/png');
+  const base64 = String(image?.base64 || image?.data || '');
+  return base64 ? `data:${mediaType};base64,${base64}` : '';
+}
+
+function imageMediaType(image, dataUrl = imageDataUrl(image)) {
+  return String(image?.mediaType || image?.mimeType || dataUrl.match(/^data:(image\/[a-z0-9.+-]+);base64,/i)?.[1] || 'image/png');
+}
+
+function appendMessageImages(container, images = []) {
+  const usable = (Array.isArray(images) ? images : []).map((image) => ({ ...image, dataUrl: imageDataUrl(image) })).filter((image) => image.dataUrl);
+  if (!usable.length) return;
+  const grid = document.createElement('div');
+  grid.className = 'message-image-grid';
+  for (const image of usable) {
+    const preview = document.createElement('img');
+    preview.src = image.dataUrl;
+    preview.alt = image.name || 'Attached image';
+    preview.title = image.name || 'Attached image';
+    grid.append(preview);
+  }
+  container.append(grid);
 }
 
 function parseAgentAssignment(text) {
@@ -2782,14 +2885,18 @@ async function openThread(threadId) {
   }
 }
 
-async function sendMessage(textOverride, { readOnlyOverride, routingText, replaceMessageId } = {}) {
+async function sendMessage(textOverride, { readOnlyOverride, routingText, replaceMessageId, imagesOverride } = {}) {
   if (state.isBusy) return;
   if (state.threadLoading) { showToast('Wait for the selected session to finish opening.'); return; }
   if (!state.workspace) { openWorkspaceDialog(); return; }
   let selectedModel = state.models.find((model) => model.id === state.modelId);
   const textarea = $('#prompt-input');
   const text = String(textOverride ?? textarea.value).trim();
-  if (!text) return;
+  const selectedImages = (imagesOverride ?? state.pendingImages).map((image) => {
+    const dataUrl = imageDataUrl(image);
+    return { ...image, dataUrl, mediaType: imageMediaType(image, dataUrl) };
+  }).filter((image) => image.dataUrl);
+  if (!text && !selectedImages.length) return;
   if (!selectedModel) {
     showToast(state.autoModelRouting ? 'Automatic routing needs a GPT-6 model in your Codex account. No GPT-5.6 fallback was used.' : 'Choose an available model before sending.', 'error');
     return;
@@ -2841,13 +2948,14 @@ async function sendMessage(textOverride, { readOnlyOverride, routingText, replac
   state.pendingSend = true;
   state.isBusy = true;
   state.activityStatus = automaticRoute ? `Auto · ${selectedModel.name} · ${automaticRoute.reason}` : 'Starting task';
-  const userMessage = { id: `user-${Date.now()}`, role: 'user', text, threadId: state.threadId };
+  const userMessage = { id: `user-${Date.now()}`, role: 'user', text, images: selectedImages, threadId: state.threadId };
   state.messages.push(userMessage);
   state.messages.push({ id: `pending-${Date.now()}`, role: 'assistant', turnId: null, text: '', pending: true });
   textarea.value = '';
+  setPendingImages([]);
   resizeComposer();
   const assignment = parseAgentAssignment(text);
-  state.threadName ||= (assignment ? `Delegate ${assignment.name}` : text.replace(/\s+/g, ' ')).slice(0, 64);
+  state.threadName ||= (assignment ? `Delegate ${assignment.name}` : (text || 'Review attached image')).replace(/\s+/g, ' ').slice(0, 64);
   renderSurface();
   try {
     const result = await api('/api/messages', { method: 'POST', body: {
@@ -2856,6 +2964,11 @@ async function sendMessage(textOverride, { readOnlyOverride, routingText, replac
       model: selectedModel.providerModel || state.modelId,
       providerId: selectedModel.providerId || 'openai',
       providerModel: selectedModel.providerModel || '',
+      images: selectedImages.map((image) => ({
+        name: image.name,
+        mediaType: image.mediaType,
+        base64: image.dataUrl.slice(image.dataUrl.indexOf(',') + 1),
+      })),
       effort: state.effort,
       readOnly: $('#access-select').value === 'plan' || (readOnlyOverride ?? ($('#access-select').value === 'read')),
       planningMode: $('#access-select').value === 'plan',
@@ -2901,6 +3014,7 @@ function updateComposerState() {
   const selectedModel = state.models.find((model) => model.id === state.modelId);
   const canUseSelectedProvider = Boolean(selectedModel?.providerId || state.account?.connected);
   $('#send-button').disabled = !state.workspace || !canUseSelectedProvider || state.isBusy || state.threadLoading;
+  $('#attach-image').disabled = !state.workspace || state.isBusy || state.threadLoading;
   $('#stop-turn').hidden = !state.isBusy;
   $('#prompt-input').disabled = state.isBusy || state.threadLoading;
   $('#plan-build').disabled = state.isBusy || state.threadLoading;
@@ -3060,8 +3174,23 @@ $$('.idea-card').forEach((button) => button.addEventListener('click', () => {
   else sendMessage(button.dataset.prompt);
 }));
 $('#send-button').addEventListener('click', () => sendMessage());
+$('#attach-image').addEventListener('click', () => $('#image-input').click());
+$('#image-input').addEventListener('change', (event) => {
+  void addImageFiles(event.currentTarget.files);
+  event.currentTarget.value = '';
+});
 $('#cancel-message-edit').addEventListener('click', cancelMessageEdit);
 $('#prompt-input').addEventListener('input', resizeComposer);
+$('#prompt-input').addEventListener('paste', (event) => {
+  const images = [...(event.clipboardData?.items || [])]
+    .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
+    .map((item) => item.getAsFile())
+    .filter(Boolean);
+  if (images.length) {
+    event.preventDefault();
+    void addImageFiles(images);
+  }
+});
 $('#prompt-input').addEventListener('keydown', (event) => {
   if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); sendMessage(); }
 });
