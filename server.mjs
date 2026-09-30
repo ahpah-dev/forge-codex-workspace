@@ -240,6 +240,41 @@ async function readGitSummary() {
   }
 }
 
+async function readWorkspaceChange(relativePath) {
+  const workspace = activeWorkspace;
+  const input = String(relativePath || '');
+  if (!workspace || !input || input.length > 2048 || path.isAbsolute(input)) throw new Error('Select a changed file in the open workspace.');
+  const candidate = path.resolve(workspace, input);
+  if (!pathIsInside(workspace, candidate) || candidate === workspace) throw new Error('Select a file inside the open workspace.');
+  const filePath = path.relative(workspace, candidate);
+  if (!filePath) throw new Error('Select a changed file, rather than the workspace folder.');
+  const options = { cwd: workspace, timeout: 7000, windowsHide: true, maxBuffer: 1024 * 1024 };
+  const diffFlags = ['--no-ext-diff', '--no-textconv', '--no-color', '--relative'];
+  let diff;
+  try {
+    ({ stdout: diff } = await execFileAsync('git', ['--literal-pathspecs', 'diff', ...diffFlags, 'HEAD', '--', filePath], options));
+  } catch {
+    const staged = await execFileAsync('git', ['--literal-pathspecs', 'diff', ...diffFlags, '--cached', '--', filePath], options);
+    const unstaged = await execFileAsync('git', ['--literal-pathspecs', 'diff', ...diffFlags, '--', filePath], options);
+    diff = staged.stdout + unstaged.stdout;
+  }
+  if (!diff) {
+    const status = await execFileAsync('git', ['--literal-pathspecs', 'status', '--porcelain=v1', '-z', '--untracked-files=all', '--', filePath], options);
+    if (status.stdout.startsWith('?? ')) {
+      const canonical = await realpath(candidate);
+      if (!pathIsInside(workspace, canonical)) throw new Error('This file points outside the open workspace.');
+      const info = await stat(canonical);
+      if (!info.isFile() || info.size > 512 * 1024) throw new Error('This file is too large for an inline diff. Open it in your editor.');
+      const contents = await readFile(canonical);
+      if (contents.includes(0)) return { path: input, diff: '', binary: true };
+      const text = contents.toString('utf8');
+      const lines = text ? text.replace(/\r\n/g, '\n').replace(/\n$/, '').split('\n') : [];
+      diff = `--- /dev/null\n+++ b/${filePath.replaceAll('\\', '/')}\n@@ -0,0 +1,${lines.length} @@\n` + lines.map((line) => '+' + line).join('\n');
+    }
+  }
+  return { path: input, diff: diff || '', binary: /Binary files .* differ|GIT binary patch/.test(diff || '') };
+}
+
 class CodexAppServer {
   constructor() {
     this.child = null;
@@ -661,6 +696,10 @@ async function handleApi(req, res, url) {
   }
   if (req.method === 'GET' && route === '/api/file') {
     try { return json(res, 200, await readWorkspaceFile(url.searchParams.get('path') || '')); }
+    catch (error) { return json(res, 400, { error: error.message }); }
+  }
+  if (req.method === 'GET' && route === '/api/changes/file') {
+    try { return json(res, 200, await readWorkspaceChange(url.searchParams.get('path') || '')); }
     catch (error) { return json(res, 400, { error: error.message }); }
   }
   if (req.method === 'POST') {

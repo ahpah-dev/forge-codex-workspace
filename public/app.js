@@ -32,7 +32,13 @@ const state = {
   selectedFile: null,
   activeContextTab: 'files',
   collapsedAgentGroups: new Set(['complete']),
+  selectedAgentId: null,
+  agentFilter: 'all',
+  agentRosterSignature: '',
+  pinnedAgentIds: new Set((() => { try { const ids = JSON.parse(localStorage.getItem('forge.pinned-agents') || '[]'); return Array.isArray(ids) ? ids.filter((id) => typeof id === 'string').slice(-200) : []; } catch { return []; } })()),
   diff: '',
+  changePreview: null,
+  changePreviewVersion: 0,
   modelId: localStorage.getItem('forge.model') || '',
   effort: localStorage.getItem('forge.effort') || 'medium',
   autoModelRouting: localStorage.getItem('forge.auto-model-routing') === 'true',
@@ -137,6 +143,10 @@ function setModal(id, open) {
   const modal = document.getElementById(id);
   if (!modal) return;
   modal.hidden = !open;
+  if (id === 'agent-assign-modal') {
+    $('.app-shell').inert = open;
+    if (!open) ($('#agent-assign').disabled ? $('#context-close') : $('#agent-assign')).focus({ preventScroll: true });
+  }
   if (open) {
     const input = modal.querySelector('input:not([type="hidden"]), textarea');
     if (input) setTimeout(() => input.focus(), 30);
@@ -490,6 +500,7 @@ function renderGit() {
   const count = $('#change-count');
   count.textContent = String(state.git?.changedFiles || 0);
   count.hidden = !state.git?.changedFiles;
+  $('#changes-toggle').title = `${state.git?.changedFiles || 0} changed files · +${state.git?.added || 0} -${state.git?.removed || 0} lines · Ctrl+Shift+2`;
 }
 
 function buildModelCatalog(codexModels, providers, anthropicStatus) {
@@ -1119,14 +1130,24 @@ function diffMarkup(diff) {
 }
 
 function renderContext() {
+  if (state.changePreview && state.changePreview.workspacePath !== state.workspace?.path) {
+    state.changePreview = null;
+    state.changePreviewVersion += 1;
+  }
   const shell = $('.app-shell');
   const panel = $('#context-panel');
   const isMobile = window.matchMedia('(max-width: 980px)').matches;
   const isOpen = !shell.classList.contains('context-hidden');
+  panel.inert = !isOpen;
+  panel.setAttribute('aria-hidden', String(!isOpen));
+  $('.main-column').inert = isMobile && isOpen;
+  $('.sidebar').inert = shell.classList.contains('sidebar-hidden') || (isMobile && isOpen);
   panel.classList.toggle('mobile-open', isMobile && isOpen);
-  $('#files-toggle').setAttribute('aria-pressed', String(state.activeContextTab === 'files' || state.activeContextTab === 'preview'));
-  $('#changes-toggle').setAttribute('aria-pressed', String(state.activeContextTab === 'changes'));
-  $('#agents-toggle').setAttribute('aria-pressed', String(state.activeContextTab === 'agents'));
+  $('#files-toggle').setAttribute('aria-pressed', String(isOpen && (state.activeContextTab === 'files' || state.activeContextTab === 'preview')));
+  $('#changes-toggle').setAttribute('aria-pressed', String(isOpen && state.activeContextTab === 'changes'));
+  $('#agents-toggle').setAttribute('aria-pressed', String(isOpen && state.activeContextTab === 'agents'));
+  $('#changes-toggle').setAttribute('aria-controls', 'context-panel');
+  $('#agents-toggle').setAttribute('aria-controls', 'context-panel');
   $$('.context-tab').forEach((button) => button.setAttribute('aria-pressed', String(state.activeContextTab === button.dataset.contextTab || (button.dataset.contextTab === 'files' && state.activeContextTab === 'preview'))));
   $('#tree-toolbar').hidden = state.activeContextTab !== 'files';
   $('#file-tree').hidden = state.activeContextTab !== 'files';
@@ -1192,12 +1213,28 @@ function renderChangeSummary(fallback) {
   const stats = document.createElement('div');
   stats.className = 'change-overview-stats';
   stats.innerHTML = `<span class="change-added">+${added}</span><span class="change-removed">-${removed}</span>`;
+  const refresh = document.createElement('button');
+  refresh.type = 'button';
+  refresh.className = 'change-refresh';
+  refresh.textContent = '↻';
+  refresh.title = 'Refresh the working tree';
+  refresh.setAttribute('aria-label', 'Refresh working tree changes');
+  refresh.addEventListener('click', () => {
+    state.changePreview = null;
+    state.changePreviewVersion += 1;
+    void refreshState({ quiet: true });
+  });
+  stats.append(refresh);
   overview.append(title, stats);
   const list = document.createElement('div');
   list.className = 'change-file-list';
   for (const entry of entries) {
-    const row = document.createElement('div');
+    const row = document.createElement('button');
+    row.type = 'button';
     row.className = 'change-file-row';
+    row.title = `Review changes in ${entry.path}`;
+    row.classList.toggle('selected', state.changePreview?.path === entry.path);
+    row.addEventListener('click', () => void loadChangeDiff(entry));
     const icon = document.createElement('span');
     icon.className = `change-file-status ${entry.status === '??' ? 'untracked' : ''}`;
     icon.textContent = entry.status || 'M';
@@ -1212,7 +1249,44 @@ function renderChangeSummary(fallback) {
     list.append(row);
   }
   summary.append(overview, list);
-  $('#diff-content').innerHTML = diffMarkup(state.diff || '');
+  const preview = state.changePreview;
+  if (preview) {
+    const header = document.createElement('div');
+    header.className = 'change-diff-heading';
+    const pathLabel = document.createElement('strong');
+    pathLabel.textContent = preview.path;
+    pathLabel.title = preview.path;
+    const open = document.createElement('button');
+    open.type = 'button';
+    open.textContent = 'Open file ↗';
+    open.disabled = preview.deleted;
+    open.addEventListener('click', () => void openFile(preview.path));
+    header.append(pathLabel, open);
+    summary.append(header);
+    if (preview.loading || preview.error || preview.binary || !preview.diff) {
+      const note = document.createElement('p');
+      note.className = 'change-diff-note';
+      note.textContent = preview.loading ? 'Loading file changes…' : preview.error || (preview.binary ? 'Binary file changed. A text diff is unavailable.' : 'No text changes in this file.');
+      summary.append(note);
+    }
+  }
+  $('#diff-content').innerHTML = diffMarkup(preview ? preview.diff || '' : state.diff || '');
+}
+
+async function loadChangeDiff(entry) {
+  const version = ++state.changePreviewVersion;
+  const workspacePath = state.workspace?.path;
+  state.changePreview = { path: entry.path, workspacePath, deleted: entry.status.includes('D'), loading: true, diff: '' };
+  renderContext();
+  try {
+    const result = await api(`/api/changes/file?path=${encodeURIComponent(entry.path)}`);
+    if (version !== state.changePreviewVersion || workspacePath !== state.workspace?.path) return;
+    state.changePreview = { ...state.changePreview, ...result, loading: false };
+  } catch (error) {
+    if (version !== state.changePreviewVersion || workspacePath !== state.workspace?.path) return;
+    state.changePreview = { ...state.changePreview, loading: false, error: error.message };
+  }
+  if (state.activeContextTab === 'changes') renderContext();
 }
 
 function markdownInline(text) {
@@ -1345,48 +1419,55 @@ function renderAgentOrganizer() {
   const agents = state.messages.filter((message) => message.role === 'activity' && message.activityType === 'agent');
   const groupsRoot = $('#agent-groups');
   const summary = $('#agent-organizer-summary');
-  const search = ($('#agent-search')?.value || '').trim().toLocaleLowerCase();
+  const search = ($('#agent-search').value || '').trim().toLocaleLowerCase();
   const runningCount = agents.filter((agent) => agentGroupFor(agent) === 'active').length;
   const count = $('#agents-count');
-  count.textContent = String(agents.length);
+  count.textContent = String(runningCount || agents.length);
   count.hidden = agents.length === 0;
-  summary.replaceChildren();
-  const stats = document.createElement('span');
-  stats.textContent = `${agents.length} ${agents.length === 1 ? 'agent' : 'agents'}`;
-  const active = document.createElement('span');
-  active.className = 'agent-summary-active';
-  active.textContent = `${runningCount} active`;
-  summary.append(stats, active);
-
+  count.classList.toggle('agents-running', runningCount > 0);
+  $('#agents-toggle').title = `${runningCount} active · ${agents.length} total agents · Ctrl+Shift+3`;
+  const assign = $('#agent-assign');
+  assign.disabled = !state.workspace || state.isBusy || state.threadLoading;
+  assign.title = !state.workspace ? 'Open a project to delegate work' : state.isBusy ? 'Wait for the current task to finish before assigning more work' : 'Assign a focused task to a subagent';
+  const signature = JSON.stringify([state.threadId, search, state.agentFilter, state.selectedAgentId, [...state.pinnedAgentIds], [...state.collapsedAgentGroups], agents]);
+  if (signature === state.agentRosterSignature) return;
+  state.agentRosterSignature = signature;
+  const attentionCount = agents.filter((agent) => agentGroupFor(agent) === 'attention').length;
+  const completeCount = agents.length - runningCount - attentionCount;
+  summary.innerHTML = `<div><strong>${runningCount}</strong><span>Active</span></div><div><strong>${completeCount}</strong><span>Finished</span></div><div><strong>${attentionCount}</strong><span>Attention</span></div>`;
+  $$('#agent-status-filters button').forEach((button) => button.setAttribute('aria-pressed', String(state.agentFilter === button.dataset.agentFilter)));
+  const selected = agents.find((agent) => String(agent.agentId) === state.selectedAgentId);
+  renderAgentDetail(selected);
   const definitions = [
+    { key: 'pinned', label: 'Pinned' },
     { key: 'active', label: 'In progress' },
     { key: 'attention', label: 'Needs attention' },
     { key: 'complete', label: 'Finished' },
   ];
-  const filtered = agents.filter((agent) => !search || [agent.name, agent.roleName, agent.task, agent.statusMessage].some((value) => String(value || '').toLocaleLowerCase().includes(search)));
+  const filtered = agents.filter((agent) => (state.agentFilter === 'all' || agentGroupFor(agent) === state.agentFilter) && (!search || [agent.name, agent.roleName, agent.task, agent.statusMessage].some((value) => String(value || '').toLocaleLowerCase().includes(search))));
   groupsRoot.replaceChildren();
   if (!agents.length) {
     const empty = document.createElement('div');
     empty.className = 'agent-organizer-empty';
-    empty.innerHTML = '<span class="agent-empty-mark" aria-hidden="true">◇</span><strong>No delegated agents yet</strong><span>When Codex splits work into subagents, you can follow and organize each task here.</span>';
+    empty.innerHTML = '<span class="agent-empty-mark" aria-hidden="true">◇</span><strong>Build your task team</strong><span>Assign a focused task above. Follow each subagent’s work here as the lead agent delegates it.</span>';
     groupsRoot.append(empty);
     return;
   }
   if (!filtered.length) {
     const empty = document.createElement('div');
     empty.className = 'context-empty';
-    empty.textContent = 'No agents or tasks match that search.';
+    empty.textContent = search ? 'No agents match this search.' : 'No agents with this status.';
     groupsRoot.append(empty);
     return;
   }
   for (const group of definitions) {
-    const groupAgents = filtered.filter((agent) => agentGroupFor(agent) === group.key);
+    const groupAgents = filtered.filter((agent) => group.key === 'pinned' ? state.pinnedAgentIds.has(String(agent.agentId)) : !state.pinnedAgentIds.has(String(agent.agentId)) && agentGroupFor(agent) === group.key);
     if (!groupAgents.length) continue;
     const section = document.createElement('details');
     section.className = `agent-group agent-group-${group.key}`;
-    section.open = search ? true : !state.collapsedAgentGroups.has(group.key);
+    section.open = search || state.agentFilter !== 'all' ? true : !state.collapsedAgentGroups.has(group.key);
     section.addEventListener('toggle', () => {
-      if (search) return;
+      if (search || !section.isConnected) return;
       if (section.open) state.collapsedAgentGroups.delete(group.key);
       else state.collapsedAgentGroups.add(group.key);
     });
@@ -1403,7 +1484,9 @@ function renderAgentOrganizer() {
     for (const agent of groupAgents) {
       const button = document.createElement('button');
       button.type = 'button';
-      button.className = `agent-organizer-row agent-organizer-${group.key}`;
+      button.className = `agent-organizer-row agent-organizer-${agentGroupFor(agent)}`;
+      button.classList.toggle('selected', String(agent.agentId) === state.selectedAgentId);
+      button.setAttribute('aria-pressed', String(String(agent.agentId) === state.selectedAgentId));
       button.dataset.agentId = String(agent.agentId || '');
       const avatar = document.createElement('span');
       avatar.className = 'agent-organizer-avatar';
@@ -1412,32 +1495,100 @@ function renderAgentOrganizer() {
       copy.className = 'agent-organizer-copy';
       const name = document.createElement('strong');
       name.textContent = agent.name || 'Codex agent';
+      name.title = name.textContent;
       const task = document.createElement('small');
       task.textContent = agent.statusMessage || agent.task || 'Working on a delegated task';
       task.title = task.textContent;
       copy.append(name, task);
+      if (agent.roleName) {
+        const role = document.createElement('span');
+        role.className = 'agent-organizer-role';
+        role.textContent = agent.roleName;
+        copy.append(role);
+      }
       const status = document.createElement('span');
       status.className = 'agent-organizer-status';
       status.textContent = statusLabel(agent.status);
       button.append(avatar, copy, status);
       button.addEventListener('click', () => {
-        const index = state.messages.findIndex((message) => message.role === 'activity' && message.activityType === 'agent' && String(message.agentId || '') === String(agent.agentId || ''));
-        if (index >= 0 && index < state.messages.length - state.historyVisibleCount) {
-          state.historyVisibleCount = state.messages.length - index;
-          renderMessages();
-        }
-        requestAnimationFrame(() => {
-          const card = $$('.agent-card').find((item) => item.dataset.agentId === String(agent.agentId || ''));
-          card?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          card?.classList.add('agent-card-focused');
-          setTimeout(() => card?.classList.remove('agent-card-focused'), 1200);
-        });
+        state.selectedAgentId = String(agent.agentId);
+        renderAgentOrganizer();
+        $('#agent-detail').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        $('#agent-detail-heading')?.focus({ preventScroll: true });
       });
       list.append(button);
     }
     section.append(header, list);
     groupsRoot.append(section);
   }
+}
+
+function renderAgentDetail(agent) {
+  const detail = $('#agent-detail');
+  detail.hidden = !agent;
+  detail.replaceChildren();
+  if (!agent) return;
+  const header = document.createElement('div');
+  header.className = 'agent-detail-header';
+  const heading = document.createElement('strong');
+  heading.id = 'agent-detail-heading';
+  heading.tabIndex = -1;
+  heading.textContent = agent.name || 'Codex agent';
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.className = 'agent-detail-close';
+  close.textContent = '×';
+  close.setAttribute('aria-label', 'Close agent details');
+  close.addEventListener('click', () => { state.selectedAgentId = null; renderAgentOrganizer(); });
+  header.append(heading, close);
+  const meta = document.createElement('div');
+  meta.className = `agent-detail-meta agent-detail-${agentGroupFor(agent)}`;
+  meta.textContent = [statusLabel(agent.status), agent.roleName].filter(Boolean).join(' · ');
+  detail.append(header, meta);
+  for (const [label, text] of [['Assigned task', agent.task], ['Latest update', agent.statusMessage]]) {
+    if (!text) continue;
+    const section = document.createElement('div');
+    section.className = 'agent-detail-section';
+    const title = document.createElement('span');
+    title.textContent = label;
+    const copy = document.createElement('p');
+    copy.textContent = text;
+    section.append(title, copy);
+    detail.append(section);
+  }
+  const actions = document.createElement('div');
+  actions.className = 'agent-detail-actions';
+  const pin = document.createElement('button');
+  pin.type = 'button';
+  pin.textContent = state.pinnedAgentIds.has(String(agent.agentId)) ? 'Unpin agent' : 'Pin agent';
+  pin.addEventListener('click', () => {
+    const id = String(agent.agentId);
+    if (state.pinnedAgentIds.has(id)) state.pinnedAgentIds.delete(id);
+    else state.pinnedAgentIds.add(id);
+    localStorage.setItem('forge.pinned-agents', JSON.stringify([...state.pinnedAgentIds].slice(-200)));
+    renderAgentOrganizer();
+  });
+  const activity = document.createElement('button');
+  activity.type = 'button';
+  activity.textContent = 'View in session ↗';
+  activity.addEventListener('click', () => jumpToAgentActivity(agent));
+  actions.append(pin, activity);
+  detail.append(actions);
+}
+
+function jumpToAgentActivity(agent) {
+  const index = state.messages.findIndex((message) => message.role === 'activity' && message.activityType === 'agent' && String(message.agentId) === String(agent.agentId));
+  if (index >= 0 && index < state.messages.length - state.historyVisibleCount) {
+    state.historyVisibleCount = state.messages.length - index;
+    renderMessages();
+  }
+  if (window.matchMedia('(max-width: 980px)').matches) { $('.app-shell').classList.add('context-hidden'); renderContext(); }
+  requestAnimationFrame(() => {
+    const card = $$('.agent-card').find((item) => item.dataset.agentId === String(agent.agentId));
+    card?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    card?.classList.add('agent-card-focused');
+    setTimeout(() => card?.classList.remove('agent-card-focused'), 1500);
+  });
 }
 
 function renderActivity(message) {
@@ -1516,7 +1667,8 @@ function renderActivity(message) {
       row.className = 'activity-file-row';
       const prefix = document.createElement('span');
       prefix.className = 'file-status';
-      prefix.textContent = change.kind || change.type || 'M';
+      const kind = typeof change.kind === 'string' ? change.kind : change.kind?.type || change.type || 'M';
+      prefix.textContent = ({ add: 'A', added: 'A', delete: 'D', deleted: 'D', update: 'M', modified: 'M' })[String(kind).toLowerCase()] || String(kind).slice(0, 2);
       const label = document.createElement('span');
       label.className = 'activity-file-name';
       label.textContent = change.path || change.filePath || change.displayPath || 'Updated file';
@@ -1537,7 +1689,9 @@ function renderActivity(message) {
 
 function getFileLineStats(filePath) {
   const normalize = (value) => String(value || '').replace(/\\/g, '/').replace(/^\.\//, '').toLocaleLowerCase();
-  const target = normalize(filePath);
+  let target = normalize(filePath);
+  const root = normalize(state.workspace?.path || '').replace(/\/$/, '');
+  if (root && target.startsWith(root + '/')) target = target.slice(root.length + 1);
   return (state.git?.entries || []).find((entry) => normalize(entry.path) === target) || null;
 }
 
@@ -1555,7 +1709,25 @@ function renderMessage(message) {
   if (message.role === 'user') {
     const user = document.createElement('article');
     user.className = 'message user-message';
-    user.textContent = message.text;
+    const delegation = parseAgentAssignment(message.text);
+    if (delegation) {
+      user.classList.add('user-delegation-message');
+      const kicker = document.createElement('span');
+      kicker.className = 'delegation-kicker';
+      kicker.textContent = 'Delegation requested';
+      const heading = document.createElement('div');
+      heading.className = 'delegation-heading';
+      const name = document.createElement('strong');
+      name.textContent = delegation.name;
+      const role = document.createElement('span');
+      role.textContent = delegation.role;
+      heading.append(name, role);
+      const task = document.createElement('p');
+      task.textContent = delegation.task;
+      const access = document.createElement('small');
+      access.textContent = delegation.readOnly ? 'Read only' : 'Workspace permissions';
+      user.append(kicker, heading, task, access);
+    } else user.textContent = message.text;
     return user;
   }
   if (message.role === 'activity') return renderActivity(message);
@@ -1578,6 +1750,16 @@ function renderMessage(message) {
   content.innerHTML = message.text ? renderMarkdown(message.text) : '';
   wrapper.append(content);
   return wrapper;
+}
+
+function parseAgentAssignment(text) {
+  const lines = String(text || '').split('\n', 3);
+  if (!lines[0]?.startsWith('Delegate task: ') || !lines[1]?.startsWith('{')) return null;
+  try {
+    const data = JSON.parse(lines[1]);
+    if (!data || typeof data.name !== 'string' || typeof data.role !== 'string' || typeof data.task !== 'string' || typeof data.readOnly !== 'boolean') return null;
+    return data;
+  } catch { return null; }
 }
 
 function renderLiveProgress() {
@@ -2244,7 +2426,7 @@ async function openThread(threadId) {
   }
 }
 
-async function sendMessage(textOverride) {
+async function sendMessage(textOverride, { readOnlyOverride, routingText } = {}) {
   if (state.isBusy) return;
   if (state.threadLoading) { showToast('Wait for the selected session to finish opening.'); return; }
   if (!state.workspace) { openWorkspaceDialog(); return; }
@@ -2258,7 +2440,7 @@ async function sendMessage(textOverride) {
   }
   let automaticRoute = null;
   if (state.autoModelRouting && (!selectedModel.providerId || selectedModel.providerId === 'openai')) {
-    automaticRoute = chooseAutomaticModel(text, !state.threadId);
+    automaticRoute = chooseAutomaticModel(routingText ?? text, !state.threadId);
     if (!automaticRoute) {
       showToast('Automatic routing needs a GPT-6 model in your Codex account. No GPT-5.6 fallback was used.', 'error');
       return;
@@ -2280,7 +2462,8 @@ async function sendMessage(textOverride) {
   state.messages.push({ id: `pending-${Date.now()}`, role: 'assistant', turnId: null, text: '', pending: true });
   textarea.value = '';
   resizeComposer();
-  state.threadName ||= text.replace(/\s+/g, ' ').slice(0, 64);
+  const assignment = parseAgentAssignment(text);
+  state.threadName ||= (assignment ? `Delegate ${assignment.name}` : text.replace(/\s+/g, ' ')).slice(0, 64);
   renderSurface();
   try {
     const result = await api('/api/messages', { method: 'POST', body: {
@@ -2290,7 +2473,7 @@ async function sendMessage(textOverride) {
       providerId: selectedModel.providerId || 'openai',
       providerModel: selectedModel.providerModel || '',
       effort: state.effort,
-      readOnly: $('#access-select').value === 'read',
+      readOnly: readOnlyOverride ?? ($('#access-select').value === 'read'),
     } });
     state.threadId = result.threadId;
     state.threadProviderId = result.providerId || 'openai';
@@ -2298,6 +2481,7 @@ async function sendMessage(textOverride) {
     for (const message of state.messages) if (message.role === 'assistant' && !message.turnId) message.turnId = result.turnId;
     renderSurface();
     $('#prompt-input').focus();
+    return true;
   } catch (error) {
     state.isBusy = false;
     state.pendingSend = false;
@@ -2306,6 +2490,7 @@ async function sendMessage(textOverride) {
     state.messages.push({ role: 'error', text: error.message });
     renderSurface();
     showToast(error.message, 'error');
+    return false;
   }
 }
 
@@ -2331,10 +2516,65 @@ function resizeComposer() {
   textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`;
 }
 
-function setContextTab(tab) {
+function setContextTab(tab, { toggle = false } = {}) {
+  if (!['files', 'changes', 'agents'].includes(tab)) return;
+  const shell = $('.app-shell');
+  const selected = state.activeContextTab === tab || (tab === 'files' && state.activeContextTab === 'preview');
+  if (toggle && selected && !shell.classList.contains('context-hidden')) {
+    shell.classList.add('context-hidden');
+    renderContext();
+    return;
+  }
   state.activeContextTab = tab;
-  $('.app-shell').classList.remove('context-hidden');
+  shell.classList.remove('context-hidden');
   renderContext();
+}
+
+function openAgentAssignment() {
+  if (!state.workspace) { openWorkspaceDialog(); return; }
+  if (state.isBusy || state.threadLoading) { showToast('Wait for this task to finish before delegating more work.'); return; }
+  $('#agent-assign-error').hidden = true;
+  syncAgentAssignmentAccess();
+  setModal('agent-assign-modal', true);
+}
+
+function syncAgentAssignmentAccess() {
+  const readOnly = $('#access-select').value === 'read' || $('#agent-assign-role').value !== 'Developer';
+  $('#agent-assign-access').textContent = readOnly ? 'Read only · This task can inspect files and report findings.' : 'Code mode · This task can edit files within your workspace permissions.';
+}
+
+async function assignSubagent(event) {
+  event.preventDefault();
+  const name = $('#agent-assign-name').value.trim();
+  const task = $('#agent-assign-task').value.trim();
+  const role = $('#agent-assign-role').value;
+  const error = $('#agent-assign-error');
+  if (!name || !task) return;
+  if (state.isBusy || state.threadLoading) { error.textContent = 'Wait for the current task to finish, then delegate this task.'; error.hidden = false; return; }
+  const readOnly = $('#access-select').value === 'read' || role !== 'Developer';
+  const text = `Delegate task: ${name}\n${JSON.stringify({ name, role, task, readOnly })}\n\nUse the available subagent tools to delegate this focused task to a real subagent with the specified name and role. ${readOnly ? 'The subagent should inspect and report without editing files.' : 'The subagent may implement this task within the selected workspace and current permissions.'} Give it clear ownership and avoid overlapping edits. Monitor its actual progress, collect its result, and report the outcome here. If subagent tools are unavailable, explain that limitation before doing the work yourself. Do not claim to have spawned a subagent unless delegation actually succeeds.`;
+  const submit = $('#agent-assign-submit');
+  const draft = $('#prompt-input').value;
+  submit.disabled = true;
+  submit.textContent = 'Requesting…';
+  error.hidden = true;
+  try {
+    const accepted = await sendMessage(text, { readOnlyOverride: readOnly, routingText: task });
+    if (accepted) {
+      setModal('agent-assign-modal', false);
+      $('#agent-assign-form').reset();
+      setContextTab('agents');
+      showToast('Delegation requested. Subagents appear as they start.');
+    } else {
+      error.textContent = 'Delegation could not start. Check the session error or your selected model and connection.';
+      error.hidden = false;
+    }
+  } finally {
+    $('#prompt-input').value = draft;
+    resizeComposer();
+    submit.disabled = false;
+    submit.textContent = 'Delegate task';
+  }
 }
 
 async function startLogin() {
@@ -2566,6 +2806,7 @@ function setMode(mode) {
   $('#access-select').value = mode === 'chat' ? 'read' : state.preferredAccess;
   syncAskModeButton();
   if (mode === 'chat') $('.app-shell').classList.add('context-hidden');
+  renderContext();
 }
 $('#mode-chat').addEventListener('click', () => setMode('chat'));
 $('#mode-code').addEventListener('click', () => setMode('code'));
@@ -2607,12 +2848,45 @@ $('#file-tree').addEventListener('click', async (event) => {
     renderContext();
   } else openFile(relativePath);
 });
-$('#files-toggle').addEventListener('click', () => setContextTab('files'));
-$('#changes-toggle').addEventListener('click', () => setContextTab('changes'));
-$('#agents-toggle').addEventListener('click', () => setContextTab('agents'));
+$('#files-toggle').addEventListener('click', () => setContextTab('files', { toggle: true }));
+$('#changes-toggle').addEventListener('click', () => setContextTab('changes', { toggle: true }));
+$('#agents-toggle').addEventListener('click', () => setContextTab('agents', { toggle: true }));
 $('#context-tabs').addEventListener('click', (event) => { const button = event.target.closest('[data-context-tab]'); if (button) setContextTab(button.dataset.contextTab); });
 $('#agent-search').addEventListener('input', renderAgentOrganizer);
-$('#context-close').addEventListener('click', () => $('.app-shell').classList.add('context-hidden'));
+$('#agent-status-filters').addEventListener('click', (event) => {
+  const button = event.target.closest('[data-agent-filter]');
+  if (!button) return;
+  state.agentFilter = button.dataset.agentFilter;
+  renderAgentOrganizer();
+});
+$('#agent-assign').addEventListener('click', openAgentAssignment);
+$('#agent-live-count').addEventListener('click', () => setContextTab('agents'));
+$('#agent-assign-form').addEventListener('submit', assignSubagent);
+$('#agent-assign-role').addEventListener('change', syncAgentAssignmentAccess);
+$('#agent-assign-form').addEventListener('keydown', (event) => {
+  if (event.key !== 'Tab') return;
+  const controls = Array.from(event.currentTarget.querySelectorAll('button:not(:disabled), input, select, textarea'));
+  const first = controls[0], last = controls.at(-1);
+  if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+  else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+});
+$('.workspace-tool-tabs').addEventListener('keydown', (event) => {
+  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+  const buttons = Array.from(event.currentTarget.querySelectorAll('button'));
+  const index = buttons.indexOf(document.activeElement);
+  if (index < 0) return;
+  event.preventDefault();
+  const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : -1) + buttons.length) % buttons.length;
+  buttons[next].focus();
+});
+document.addEventListener('keydown', (event) => {
+  if (!(event.ctrlKey || event.metaKey) || !event.shiftKey || event.altKey) return;
+  const index = ['Digit1', 'Digit2', 'Digit3'].indexOf(event.code);
+  if (index < 0 || !state.workspace || $$('.modal-backdrop').some((modal) => !modal.hidden)) return;
+  event.preventDefault();
+  setContextTab(['files', 'changes', 'agents'][index], { toggle: true });
+});
+$('#context-close').addEventListener('click', () => { $('.app-shell').classList.add('context-hidden'); renderContext(); });
 $('#account-menu').addEventListener('click', () => {
   if (!state.account?.connected && state.account?.connectionError) refreshState({ quiet: true });
   else if (!state.account?.connected) startLogin();
