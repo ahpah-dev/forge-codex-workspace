@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.11
+
+- Matched the desktop app, welcome screen, activity indicator, and Windows app icon to the Forge website logo.
+
 ## 1.0.10
 
 - Fixed current Codex permission request methods so external-model requests show actionable Accept and Decline controls.
