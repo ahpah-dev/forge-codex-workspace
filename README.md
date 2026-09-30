@@ -1,0 +1,42 @@
+# Forge
+
+Forge is a local coding workspace for Codex. It includes a project browser, file changes, terminal activity, approval prompts, and live agent task summaries. It connects to the Codex account already signed in on this Windows user profile and uses the model catalog and rate limits available to that account.
+
+## Windows app
+
+Download `Forge-Setup-1.0.2-x64.exe` from the [latest GitHub release](https://github.com/davidegeric-cloud/forge-codex-workspace/releases/latest). Run the installer, then launch Forge from the Start menu or desktop shortcut. Sign in to Codex once in the Codex app or Codex CLI; Forge uses that saved local account automatically.
+
+To build the installer yourself, use Node.js 18 or newer on Windows x64, run `npm install`, then `npm run dist:win`. The installer is written to `release/Forge-Setup-1.0.2-x64.exe`. The desktop app bundles its Codex runtime and does not need a global Node.js install.
+
+## Start from source
+
+1. Install Node.js 18 or newer.
+2. Sign in to Codex with your ChatGPT account in the Codex app or CLI.
+3. Run `start-forge.cmd` to launch the browser version. It installs Forge's pinned Codex CLI on first run.
+4. Choose a project folder in Forge.
+
+For local desktop development, run `npm install` and `npm run desktop`. `npm start` launches the browser version.
+
+## Providers and accounts
+
+**OpenAI / Codex:** Forge reads the connected account's model catalog and usage limits. GPT-6 model availability and rate limits follow the signed-in Codex account and its standard plan allowance.
+
+**Anthropic / Claude Code:** Install the official [Claude Code CLI](https://code.claude.com/docs/en/setup), open **Manage providers**, and choose **Connect**. Forge uses the local Claude Code Agent SDK runtime and its saved Claude sign-in; sign in separately from ChatGPT. Claude model aliases select the latest Opus, Sonnet, or Haiku available to that CLI. Anthropic currently allows third-party Agent SDK usage to draw from Claude plan limits; the same plan usage limits apply. See [Anthropic's subscription and Agent SDK guidance](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan).
+
+**Google AI Pro:** Forge cannot sign in with a Google AI Pro subscription. Google's Gemini CLI subscription OAuth is restricted to Google's own client and must not be used by third-party apps. See [Google's Gemini CLI terms](https://github.com/google-gemini/gemini-cli/blob/main/docs/resources/tos-privacy.md). Google AI Studio or Vertex API access is separate from an AI Pro subscription; Forge's custom provider path requires a Responses API endpoint and an API key, so it only works with services that provide that interface.
+
+Use **Manage providers** to add OpenRouter, NVIDIA NIM, or another service that supports the Responses API. Provider keys are encrypted with Windows DPAPI in the current user's local Forge data and are not written to `settings.json` or the Codex config file. Requests through external providers use that provider's billing, policies, and limits; they do not use the ChatGPT Codex allowance. ChatGPT remains signed in when other providers are used.
+
+## Workspace and appearance
+
+Forge opens the Windows folder picker in the desktop app. The browser version accepts a local folder path. Code mode can edit files in the selected workspace; requested access outside it can require your approval. Chat mode defaults to read-only.
+
+The sidebar can be resized or hidden, and its state is remembered. Open the gear button to customize colors, background, interface scale, conversation and code fonts, and line spacing.
+
+While a task runs, Forge shows concrete activity from command, file, search, tool, plan, and delegated-agent events. Claude subagents display their task and short progress summaries; Forge does not expose private chain-of-thought. Permission requests appear as reviewable cards with allow and decline actions.
+
+## Local data
+
+The web server listens only on `127.0.0.1`. In the packaged app, Forge settings and encrypted provider keys are stored under the Windows user application-data folder; the browser version stores settings in `data/`. Project files are read and edited in the selected folder. Codex and Claude Code manage their own account authentication.
+
+Forge is an independent local interface. It is not an official OpenAI, Anthropic, or Google application.

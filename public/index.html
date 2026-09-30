@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <meta name="session-token" content="__FORGE_SESSION_TOKEN__">
+    <meta name="theme-color" content="#faf9f6">
+    <title>Forge — Codex workspace</title>
+    <script src="/theme.js"></script>
+    <link rel="stylesheet" href="/styles.css">
+    <link rel="stylesheet" href="/appearance.css">
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <div class="app-shell context-hidden">
+      <aside class="sidebar" aria-label="Session navigation">
+        <div class="window-chrome">
+          <div class="forge-brand"><span class="forge-symbol" aria-hidden="true"><svg class="gpt-mark" viewBox="0 0 24 24" aria-hidden="true"><path d="M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.872zm16.5963 3.8558L13.1038 8.364 15.1192 7.2a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.407-.667zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0976-2.3654l2.602-1.4998 2.6069 1.4998v2.9994l-2.5974 1.4997-2.6067-1.4997Z"/></svg></span><span><strong>Forge</strong><small>CODE STUDIO</small></span></div>
+          <button class="icon-button sidebar-collapse" id="sidebar-collapse" type="button" aria-label="Hide sidebar" title="Hide sidebar" aria-expanded="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5A1.5 1.5 0 0 1 5.5 4h13A1.5 1.5 0 0 1 20 5.5v13a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 18.5zM9 4v16m6-10-3 2 3 2"/></svg></button>
+        </div>
+
+        <div class="mode-switch" role="tablist" aria-label="Workspace mode">
+          <button id="mode-chat" type="button" role="tab" aria-selected="false">Chat</button>
+          <button id="mode-code" type="button" role="tab" aria-selected="true">Code</button>
+        </div>
+
+        <button class="new-task-button" id="new-task" type="button"><span class="plus-icon" aria-hidden="true">+</span><span>New session</span></button>
+
+        <section class="sidebar-section workspace-section" aria-label="Current folder">
+          <div class="section-heading"><span>Folder</span><button class="tiny-icon-button" id="open-workspace" type="button" aria-label="Add folder" title="Add folder">+</button></div>
+          <button class="workspace-card" id="workspace-card" type="button"><span class="folder-glyph" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3.5 6.5h6l2 2H20a1.5 1.5 0 0 1 1.5 1.5v7.8a1.7 1.7 0 0 1-1.7 1.7H4.2a1.7 1.7 0 0 1-1.7-1.7V8.2a1.7 1.7 0 0 1 1-1.7Z"/></svg></span><span class="workspace-card-copy"><strong id="workspace-name">Choose a folder</strong><small id="workspace-short-path">Open a local project</small></span><span class="chevron" aria-hidden="true">⌄</span></button>
+          <div class="recent-workspaces" id="recent-workspaces"></div>
+        </section>
+
+        <section class="sidebar-section sessions-section" aria-label="Sessions">
+          <div class="section-heading"><span>Sessions</span><div class="session-tools"><button class="tiny-icon-button" id="filter-sessions" type="button" aria-label="Filter sessions" aria-expanded="false" title="Filter sessions"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M7 11h10m-7 5h4"/></svg></button><button class="tiny-icon-button refresh-sessions" id="refresh-sessions" type="button" aria-label="Refresh sessions" title="Refresh sessions"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5M6 9a7 7 0 0 1 12-2l2 2M4 13l2 2a7 7 0 0 0 12-2"/></svg></button></div></div>
+          <label class="session-filter-wrap" id="session-filter-wrap" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.3"/><path d="m16 16 4.5 4.5"/></svg><input id="session-filter" type="search" placeholder="Filter sessions" autocomplete="off"></label>
+          <div class="session-list" id="session-list"><div class="sidebar-empty">No sessions found</div></div>
+        </section>
+
+        <div class="sidebar-bottom">
+          <div class="account-card" id="account-card">
+            <div class="account-avatar" aria-hidden="true">F</div>
+            <div class="account-copy"><strong id="connection-label">Connecting to Codex</strong><span id="account-plan">Checking your account</span><span id="cli-version" class="cli-version">Codex CLI</span></div>
+            <button class="account-menu-button" id="account-menu" type="button" aria-label="Account and usage details" title="Account and usage details"><span>⌃</span><span>⌄</span></button>
+            <div class="account-usage"><div class="usage-row"><span>Codex usage</span><span id="usage-label">—</span></div><div class="usage-track"><span id="usage-bar"></span></div><div class="usage-reset" id="usage-reset">Plan limits apply</div></div>
+            <span class="connection-dot" id="connection-dot" aria-hidden="true"></span>
+          </div>
+          <button class="footer-link" id="quit-app" type="button" aria-label="Quit Forge"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 5H5.7A1.7 1.7 0 0 0 4 6.7v10.6A1.7 1.7 0 0 0 5.7 19H10M14 8l4 4-4 4M18 12H9"/></svg><span>Quit Forge</span></button>
+        </div>
+      </aside>
+
+      <div class="sidebar-resize-handle" id="sidebar-resize-handle" role="separator" aria-orientation="vertical" aria-label="Resize sidebar" aria-valuemin="216" aria-valuemax="420" aria-valuenow="248" tabindex="0"></div>
+
+      <main class="main-column">
+        <header class="topbar">
+          <button class="icon-button sidebar-reopen" id="sidebar-reopen" type="button" aria-label="Show sidebar" title="Show sidebar" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5A1.5 1.5 0 0 1 5.5 4h13A1.5 1.5 0 0 1 20 5.5v13a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 18.5zM9 4v16m3-8h5m-2-2 2 2-2 2"/></svg></button>
+          <div class="preview-label"><span class="preview-dot"></span><span>Local workspace</span></div>
+          <div class="breadcrumb" id="breadcrumb"><span class="breadcrumb-root">Forge</span><span class="breadcrumb-separator">/</span><span class="breadcrumb-current" id="breadcrumb-current">New workspace</span></div>
+          <div class="topbar-actions">
+            <button class="model-update-notice" id="model-update-notice" type="button" hidden><span class="notice-icon" aria-hidden="true">↻</span><strong id="model-update-title">GPT-6 needs a Codex update</strong><span class="notice-copy" id="model-update-copy"></span></button>
+            <div class="branch-pill" id="branch-pill" hidden><span class="branch-icon">⌘</span><span id="branch-name"></span><span class="branch-changes" id="branch-changes"></span></div>
+            <button class="topbar-button" id="files-toggle" type="button" aria-label="Show project files" aria-pressed="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 5.5h6l2 2h7a1.5 1.5 0 0 1 1.5 1.5v9a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18V7a1.5 1.5 0 0 1 1.5-1.5Z"/></svg><span>Files</span></button>
+            <button class="topbar-button" id="changes-toggle" type="button" aria-label="Show working tree changes" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14M16 5v14M5 8h6M13 16h6"/></svg><span>Changes</span><span class="change-count" id="change-count" hidden>0</span></button>
+            <button class="icon-button settings-button" id="settings-button" type="button" aria-label="Switch workspace" title="Switch workspace"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8.7a3.3 3.3 0 1 0 0 6.6 3.3 3.3 0 0 0 0-6.6ZM19.2 13.5l1.2.9-1.4 2.5-1.5-.6a7.8 7.8 0 0 1-1.5.9l-.2 1.6h-2.9l-.3-1.6a7.8 7.8 0 0 1-1.6-.7l-1.4.7-1.5-2.5 1.2-1.1a7.2 7.2 0 0 1-.1-1.8L6.1 11l1.2-2.7 1.6.4a7.8 7.8 0 0 1 1.4-1L10.4 6h3l.3 1.6c.6.2 1.1.5 1.6.8l1.5-.6 1.4 2.5-1.2 1.1a7 7 0 0 1 .2 2.1Z"/></svg></button>
+          </div>
+        </header>
+
+        <div class="workspace-surface" id="workspace-surface">
+          <section class="welcome-view" id="welcome-view">
+            <div class="welcome-hero"><span class="welcome-mark" aria-hidden="true"><svg class="gpt-mark" viewBox="0 0 24 24" aria-hidden="true"><path d="M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.872zm16.5963 3.8558L13.1038 8.364 15.1192 7.2a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.407-.667zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0976-2.3654l2.602-1.4998 2.6069 1.4998v2.9994l-2.5974 1.4997-2.6067-1.4997Z"/></svg></span><div class="welcome-copy-block"><h1 id="welcome-title">Build something useful.</h1><p id="welcome-copy">Open a project, then tell Codex what you want to change.</p></div></div>
+
+            <div class="open-project-panel" id="open-project-panel">
+              <input id="workspace-path" type="hidden">
+              <button class="path-open-button" id="open-project-submit" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 6.5h6l2 2H20a1.5 1.5 0 0 1 1.5 1.5v7.8a1.7 1.7 0 0 1-1.7 1.7H4.2a1.7 1.7 0 0 1-1.7-1.7V8.2a1.7 1.7 0 0 1 1-1.7Z"/></svg><span>Select folder</span></button>
+              <label class="environment-select" title="Choose local access mode"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="1.5"/><path d="M8 21h8m-4-4v4"/></svg><span class="environment-label">Local</span><select id="access-select" aria-label="Local access mode"><option value="write">Local</option><option value="read">Local · Read only</option></select><span class="select-chevron" aria-hidden="true">⌄</span></label>
+            </div>
+
+            <div class="idea-divider" id="idea-divider"><span>START WITH AN IDEA</span></div>
+            <div class="idea-grid" id="idea-grid">
+              <button class="idea-card" data-prompt="Explore this codebase and explain its main parts, entry points, and how they fit together." type="button"><span><small>GET ORIENTED</small>Understand this project</span></button>
+              <button class="idea-card" data-prompt="Find one useful TODO comment in this codebase, inspect its context, and implement a focused fix." type="button"><span><small>MAKE A SMALL FIX</small>Pick up a TODO</span></button>
+              <button class="idea-card" data-prompt="Review this project and recommend the most useful areas to improve its tests. Make no changes until I approve a specific suggestion." type="button"><span><small>QUALITY PASS</small>Improve test coverage</span></button>
+            </div>
+            <div class="empty-workspace-note" id="empty-workspace-note"><span class="note-icon">✦</span><span>Works locally with the Codex access and limits on your signed-in plan.</span></div>
+          </section>
+
+          <section class="conversation-view" id="conversation-view" hidden>
+            <div class="conversation-scroll" id="conversation-scroll" role="region" tabindex="0" aria-label="Code session conversation"><div class="conversation-heading"><div class="conversation-head-row"><div class="conversation-kicker">CODE SESSION</div><span class="agent-live-count" id="agent-live-count" hidden>0 agents active</span></div><h2 id="conversation-title">New session</h2><div class="conversation-subtitle" id="conversation-subtitle"></div></div><div class="thread-loading-note" id="thread-loading-note" role="status" aria-live="polite" hidden><span class="thread-loading-spinner" aria-hidden="true"></span><span>Opening session…</span></div><div class="message-list" id="message-list"></div><div class="approval-slot" id="approval-slot"></div><div class="scroll-tail" id="scroll-tail"></div></div>
+          </section>
+
+          <div class="composer-dock" id="composer-dock">
+            <div class="composer-shell">
+              <textarea id="prompt-input" rows="3" placeholder="Find a small todo in the codebase and do it" aria-label="Message Codex"></textarea>
+              <div class="composer-bottom">
+                <div class="composer-controls">
+                  <div class="model-picker" id="model-picker">
+                    <button class="model-picker-trigger" id="model-picker-trigger" type="button" aria-haspopup="listbox" aria-expanded="false" aria-controls="model-options" title="Choose a model" disabled>
+                      <span class="model-picker-mark tier-default" id="model-picker-mark" aria-hidden="true"></span>
+                      <span class="model-picker-copy"><small>MODEL</small><strong id="model-picker-label">Loading models…</strong></span>
+                      <svg class="model-picker-chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg>
+                    </button>
+                    <div class="model-picker-menu" id="model-picker-menu" hidden>
+                      <div class="model-picker-heading"><span>Choose a model <small id="model-picker-count"></small></span><button class="provider-manage-link" id="manage-providers" type="button">Manage providers</button></div>
+                      <label class="model-search-wrap"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.3"/><path d="m16 16 4.5 4.5"/></svg><input id="model-search" type="search" placeholder="Search models" autocomplete="off" aria-label="Search models"></label>
+                      <div class="model-options" id="model-options" role="listbox" aria-label="Available models"></div>
+                    </div>
+                    <select id="model-select" aria-label="Model" tabindex="-1" aria-hidden="true" hidden><option value="">Loading models…</option></select>
+                  </div>
+                  <div class="effort-control" id="effort-control">
+                    <button class="effort-trigger" id="effort-trigger" type="button" aria-expanded="false" aria-controls="effort-popover" title="Choose reasoning effort"><span>Reasoning</span><strong id="effort-current-label">Medium</strong><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg></button>
+                    <div class="effort-popover" id="effort-popover" hidden>
+                      <div class="effort-popover-heading"><span>Reasoning effort</span><strong id="effort-popover-value">Medium</strong></div>
+                      <div class="effort-slider-row"><span id="effort-min-label">Low</span><input id="effort-select" class="effort-slider" type="range" min="0" max="5" step="1" value="1" aria-label="Reasoning effort" aria-valuetext="Medium" title="Reasoning effort"><span id="effort-max-label">Ultracode</span></div>
+                      <div class="effort-scale-hint">Higher effort uses more of your Codex limits.</div>
+                    </div>
+                  </div>
+                  <span class="composer-usage" id="composer-usage">Codex limits apply</span>
+                </div>
+                <div class="composer-actions"><div class="ask-mode-wrap" id="ask-mode-wrap"><button class="ask-mode" id="ask-mode" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="ask-mode-menu" title="Choose how Codex can work in this folder"><span id="ask-mode-label">Code</span><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg></button><div class="ask-mode-menu" id="ask-mode-menu" role="menu" aria-label="Work mode" hidden><button class="ask-mode-option" type="button" role="menuitemradio" data-access-mode="read"><span><strong>Ask</strong><small>Read files and answer without editing</small></span><span class="ask-mode-check" aria-hidden="true"></span></button><button class="ask-mode-option" type="button" role="menuitemradio" data-access-mode="write"><span><strong>Code</strong><small>Make changes in the selected folder</small></span><span class="ask-mode-check" aria-hidden="true"></span></button></div></div><span class="composer-shortcut">Enter to send</span><button class="stop-button" id="stop-turn" type="button" hidden>Stop</button><button class="send-button" id="send-button" type="button" aria-label="Send message"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5m-6 6 6-6 6 6"/></svg></button></div>
+              </div>
+            </div>
+            <div class="composer-caption"><span class="shield-icon" aria-hidden="true">◇</span><span>Codex uses your selected folder. It asks before actions that need more permission.</span></div>
+          </div>
+        </div>
+      </main>
+
+      <aside class="context-panel" id="context-panel" aria-label="Workspace files and changes">
+        <div class="context-header"><div><div class="context-kicker" id="context-kicker">PROJECT</div><h2 id="context-title">Files</h2></div><button class="icon-button context-close" id="context-close" type="button" aria-label="Close panel"><svg viewBox="0 0 24 24"><path d="m7 7 10 10M17 7 7 17"/></svg></button></div>
+        <div class="context-tabs" id="context-tabs"><button class="context-tab" data-context-tab="files" type="button" aria-pressed="true">Files</button><button class="context-tab" data-context-tab="changes" type="button" aria-pressed="false">Changes</button></div>
+        <div class="context-toolbar" id="tree-toolbar"><div class="file-search"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.3"/><path d="m16 16 4.5 4.5"/></svg><input id="file-search" type="search" placeholder="Filter visible files" autocomplete="off"></div><button class="tiny-icon-button" id="refresh-tree" type="button" aria-label="Refresh files" title="Refresh files"><svg viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5M6 9a7 7 0 0 1 12-2l2 2M4 13l2 2a7 7 0 0 0 12-2"/></svg></button></div>
+        <div class="context-body" id="context-body"><div class="file-tree" id="file-tree"><div class="context-empty">Open a workspace to see its files.</div></div><div class="file-preview" id="file-preview" hidden></div><div class="change-preview" id="change-preview" hidden><div class="change-summary" id="change-summary">Changes from this session will appear here.</div><pre class="diff-content" id="diff-content"></pre></div></div>
+        <div class="context-footer"><span class="context-footer-icon">◉</span><span id="context-footer-label">LOCAL WORKSPACE</span><span class="context-footer-status" id="context-footer-status">Not open</span></div>
+      </aside>
+    </div>
+
+    <div class="modal-backdrop" id="workspace-modal" hidden><section class="dialog-card" role="dialog" aria-modal="true" aria-labelledby="workspace-dialog-title"><button class="dialog-close icon-button" data-close-modal="workspace-modal" type="button" aria-label="Close"><svg viewBox="0 0 24 24"><path d="m7 7 10 10M17 7 7 17"/></svg></button><div class="dialog-icon folder-dialog-icon"><svg viewBox="0 0 24 24"><path d="M3.5 6.5h6l2 2H20a1.5 1.5 0 0 1 1.5 1.5v7.8a1.7 1.7 0 0 1-1.7 1.7H4.2a1.7 1.7 0 0 1-1.7-1.7V8.2a1.7 1.7 0 0 1 1-1.7Z"/></svg></div><div class="dialog-eyebrow">LOCAL PROJECT</div><h2 id="workspace-dialog-title">Select a folder</h2><p>Paste the folder path you want Forge and Codex to work in.</p><label class="dialog-field"><span>Folder path</span><input id="workspace-modal-path" type="text" spellcheck="false" autocomplete="off" placeholder="C:\Projects\my-app"></label><div class="dialog-error" id="workspace-error" hidden></div><div class="dialog-actions"><button class="quiet-button" data-close-modal="workspace-modal" type="button">Cancel</button><button class="primary-button" id="workspace-modal-open" type="button">Open folder <span>↗</span></button></div><div class="dialog-footnote"><span>⌁</span> The project folder is accessed from this computer.</div></section></div>
+
+    <div class="modal-backdrop" id="login-modal" hidden><section class="dialog-card login-dialog" role="dialog" aria-modal="true" aria-labelledby="login-dialog-title"><button class="dialog-close icon-button" data-close-modal="login-modal" type="button" aria-label="Close"><svg viewBox="0 0 24 24"><path d="m7 7 10 10M17 7 7 17"/></svg></button><div class="dialog-icon login-dialog-icon">✳</div><div class="dialog-eyebrow">CODEX ACCOUNT</div><h2 id="login-dialog-title">Connect your ChatGPT account</h2><p>Forge uses the Codex access included with your ChatGPT plan. Your usual Codex limits and permissions apply.</p><a class="primary-button login-link" id="login-link" href="#" target="_blank" rel="noopener noreferrer" hidden>Continue with ChatGPT <span>↗</span></a><div class="login-waiting" id="login-waiting">Sign-in opens in your browser. Return here when you’re done.</div><div class="dialog-error" id="login-error" hidden></div><button class="quiet-button login-refresh" id="login-refresh" type="button">I’ve signed in</button></section></div>
+
+    <div class="modal-backdrop" id="settings-modal" hidden>
+      <section class="dialog-card appearance-dialog" role="dialog" aria-modal="true" aria-labelledby="appearance-title" aria-describedby="appearance-description">
+        <header class="appearance-header"><div><div class="dialog-eyebrow">MAKE IT YOURS</div><h2 id="appearance-title">Appearance</h2><p id="appearance-description">Your workspace, your style. Changes preview instantly.</p></div><button class="icon-button" id="appearance-close" type="button" aria-label="Close settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 7 10 10M17 7 7 17"/></svg></button></header>
+        <div class="appearance-body">
+          <section class="appearance-section"><div class="appearance-section-title"><h3>Start with a theme</h3><span id="appearance-preset-label">Linen</span></div><div class="theme-presets" id="theme-presets" role="group" aria-label="Theme presets"></div></section>
+          <section class="appearance-section"><div class="appearance-section-title"><h3>Colors</h3><span>Pick a color or enter its hex code</span></div><div class="theme-color-grid" id="theme-colors"></div><details class="appearance-advanced"><summary>More colors · messages, code, status &amp; model tiers</summary><div class="theme-color-grid" id="theme-colors-advanced"></div></details></section>
+          <section class="appearance-section"><div class="appearance-section-title"><h3>Typography</h3><span>Interface, conversation &amp; code</span></div><div class="theme-font-grid" id="theme-fonts"></div><p class="appearance-font-note">Use an installed font or upload WOFF2, WOFF, TTF, or OTF files (up to 5 MB each). Uploaded fonts stay on this device.</p><div class="theme-range-grid" id="theme-ranges"></div></section>
+          <section class="appearance-section"><div class="appearance-section-title"><h3>Finishing touches</h3></div><label class="appearance-select-field"><span>Workspace background</span><select id="theme-pattern"><option value="none">Clean canvas</option><option value="dots">Subtle dots</option><option value="grid">Fine grid</option></select></label><div class="appearance-sample"><span class="sample-label">LIVE PREVIEW</span><strong>A little clarity goes a long way.</strong><p>Explore, build, and refine your next idea.</p><code>const next = await createSomething();</code></div></section>
+        </div>
+        <footer class="appearance-footer"><span id="appearance-save-status" role="status">Saved on this device</span><div><button class="quiet-button" id="theme-reset" type="button">Reset</button><button class="primary-button" id="appearance-done" type="button">Done</button></div></footer>
+      </section>
+    </div>
+
+    <div class="modal-backdrop" id="providers-modal" hidden>
+      <section class="dialog-card providers-dialog" role="dialog" aria-modal="true" aria-labelledby="providers-dialog-title">
+        <button class="dialog-close icon-button" data-close-modal="providers-modal" type="button" aria-label="Close"><svg viewBox="0 0 24 24"><path d="m7 7 10 10M17 7 7 17"/></svg></button>
+        <div class="provider-dialog-heading"><div class="dialog-icon provider-dialog-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6.5h16M4 12h16M4 17.5h16"/><circle cx="8" cy="6.5" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="10" cy="17.5" r="2"/></svg></div><div><div class="dialog-eyebrow">MODEL ROUTING</div><h2 id="providers-dialog-title">Model providers</h2></div></div>
+        <p>Your saved Codex sign-in stays connected. Choose a model account below or add a compatible API provider.</p>
+        <div class="provider-account-list">
+          <section class="provider-account-card" aria-label="Anthropic connection">
+            <span class="provider-account-mark claude-account-mark" aria-hidden="true">A</span>
+            <span class="provider-account-copy"><strong>Anthropic · Claude Code</strong><small id="anthropic-account-status">Checking Claude Code sign-in…</small></span>
+            <button class="provider-account-action" id="anthropic-connect" type="button">Connect</button>
+          </section>
+          <section class="provider-account-card provider-account-note" aria-label="Google AI Pro compatibility">
+            <span class="provider-account-mark google-account-mark" aria-hidden="true">G</span>
+            <span class="provider-account-copy"><strong>Google AI Pro</strong><small id="google-pro-note">Google restricts Gemini CLI subscription sign-in to its own client. Forge cannot use that subscription login.</small></span>
+            <a class="provider-account-action provider-account-link" href="https://github.com/google-gemini/gemini-cli/blob/main/docs/resources/tos-privacy.md" target="_blank" rel="noreferrer">Details</a>
+          </section>
+        </div>
+        <div class="provider-list" id="provider-list" aria-live="polite"></div>
+        <div class="provider-form-heading"><strong id="provider-form-title">Add a provider</strong><button class="provider-cancel-edit" id="provider-cancel-edit" type="button" hidden>Cancel edit</button></div>
+        <input id="provider-id" type="hidden">
+        <div class="provider-presets" role="group" aria-label="Provider presets">
+          <button class="provider-preset" data-provider-preset="openrouter" type="button"><span class="provider-preset-mark openrouter-mark">◈</span><span>OpenRouter</span></button>
+          <button class="provider-preset" data-provider-preset="nvidia" type="button"><span class="provider-preset-mark nvidia-mark">N</span><span>NVIDIA NIM</span></button>
+          <button class="provider-preset" data-provider-preset="custom" type="button"><span class="provider-preset-mark custom-mark">＋</span><span>Custom</span></button>
+        </div>
+        <label class="dialog-field"><span>Provider name</span><input id="provider-name" type="text" maxlength="48" autocomplete="off" placeholder="My inference endpoint"></label>
+        <label class="dialog-field"><span>Responses API base URL</span><input id="provider-base-url" type="url" spellcheck="false" autocomplete="off" placeholder="https://openrouter.ai/api/v1"></label>
+        <label class="dialog-field"><span>API key <small id="provider-key-hint">Stored encrypted on this Windows account</small></span><input id="provider-api-key" type="password" autocomplete="new-password" spellcheck="false" placeholder="Paste provider API key"></label>
+        <div class="provider-model-field"><label class="dialog-field"><span>Model IDs <small>One per line</small></span><textarea id="provider-models" rows="4" spellcheck="false" placeholder="anthropic/claude-sonnet-4.5"></textarea></label><button class="quiet-button provider-discover" id="provider-discover" type="button">Load models</button></div>
+        <div class="provider-protocol-note">Codex sends Responses API requests. Models that only offer chat completions will not work here.</div>
+        <div class="dialog-error" id="provider-error" hidden></div>
+        <div class="provider-billing-note"><span class="provider-lock" aria-hidden="true">◇</span><span>API keys stay in your local Windows secure store. Requests to custom providers use their billing and terms; your ChatGPT login remains connected.</span></div>
+        <div class="dialog-actions"><button class="quiet-button" data-close-modal="providers-modal" type="button">Done</button><button class="primary-button" id="provider-save" type="button">Add provider</button></div>
+      </section>
+    </div>
+
+    <div class="toast-region" id="toast-region" aria-live="polite"></div>
+  </body>
+</html>

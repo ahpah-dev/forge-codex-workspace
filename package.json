@@ -1,0 +1,91 @@
+{
+  "name": "forge-codex-workspace",
+  "version": "1.0.2",
+  "description": "Forge local desktop coding workspace connected to Codex",
+  "author": "Forge",
+  "private": true,
+  "type": "module",
+  "main": "desktop.cjs",
+  "scripts": {
+    "start": "node server.mjs",
+    "desktop": "electron .",
+    "dist:win": "electron-builder --win nsis"
+  },
+  "devDependencies": {
+    "@openai/codex": "^0.159.0",
+    "electron": "^44.5.1",
+    "electron-builder": "^26.15.3"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.285"
+  },
+  "build": {
+    "appId": "com.forge.codexworkspace",
+    "productName": "Forge",
+    "asar": true,
+    "files": [
+      "desktop.cjs",
+      "desktop-preload.cjs",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "server.mjs",
+        "to": "forge/server.mjs"
+      },
+      {
+        "from": "anthropic-provider.mjs",
+        "to": "forge/anthropic-provider.mjs"
+      },
+      {
+        "from": "provider-auth.mjs",
+        "to": "forge/provider-auth.mjs"
+      },
+      {
+        "from": "provider-secrets.mjs",
+        "to": "forge/provider-secrets.mjs"
+      },
+      {
+        "from": "node_modules/@anthropic-ai/claude-agent-sdk",
+        "to": "forge/node_modules/@anthropic-ai/claude-agent-sdk",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "public",
+        "to": "forge/public"
+      },
+      {
+        "from": "build/icon.ico",
+        "to": "forge/icon.ico"
+      },
+      {
+        "from": "node_modules/@openai/codex-win32-x64/vendor",
+        "to": "codex/vendor",
+        "filter": [
+          "**/*",
+          "!**/voice/**"
+        ]
+      }
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "build/icon.ico",
+      "artifactName": "Forge-Setup-${version}-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Forge"
+    }
+  }
+}
