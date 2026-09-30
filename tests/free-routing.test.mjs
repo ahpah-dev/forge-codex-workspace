@@ -54,7 +54,7 @@ test('a full NIM allowance stops the cascade with no unbounded retry', async () 
     if (url.includes('/models')) return json({ data: url.includes('openrouter') ? [free()] : [{ id: 'openai/gpt-oss-120b' }] });
     return json({}, 429);
   } });
-  await assert.rejects(router.openCompletion(request), /NVIDIA NIM also reached/);
+  await assert.rejects(router.openCompletion(request), /NVIDIA NIM.*rate limit/);
 });
 
 test('quota classification rejects authentication and generic network failures', () => {
@@ -86,10 +86,39 @@ test('unsupported history is rejected rather than silently dropped', () => {
   assert.throws(() => toChatRequest({ input: [{ type: 'compaction', encrypted_content: 'opaque' }] }), /Cannot safely translate/);
 });
 
+test('NIM Harmony channel suffix maps only to an advertised tool', async () => {
+  const res = sink();
+  await bridgeResponses({ input: { model: 'gpt-oss', input: 'Inspect', tools: [{ type: 'function', name: 'exec_command' }] }, res,
+    router: { openCompletion: async () => ({ route: { name: 'NIM GPT-OSS' }, response: stream([{ choices: [{ delta: { tool_calls: [{ index: 0, id: 'c1', function: { name: 'exec_command<|channel|>commentary', arguments: '{"cmd":"pwd"}' } }] }, finish_reason: 'tool_calls' }] }]) }) } });
+  assert.equal(events(res).at(-1).response.output[0].name, 'exec_command');
+});
+
 function sink() {
   return { output: '', destroyed: false, writeHead() {}, write(chunk) { this.output += chunk; }, end() {} };
 }
 function events(res) { return res.output.split('\n').filter((line) => line.startsWith('data:')).map((line) => JSON.parse(line.slice(5))); }
+
+test('patch calls emit complete custom input events with their namespace intact', async () => {
+  const res = sink();
+  const patch = '*** Begin Patch\n*** Add File: marker.txt\n+saved\n*** End Patch';
+  await bridgeResponses({ input: { model: 'nim', input: 'Save a file', tools: [{ type: 'namespace', name: 'functions', tools: [{ type: 'custom', name: 'apply_patch' }] }] }, res,
+    router: { openCompletion: async () => ({ route: { name: 'NIM fixture' }, response: stream([{ choices: [{ delta: { tool_calls: [{ index: 0, id: 'patch1', function: { name: 'functions__apply_patch', arguments: JSON.stringify({ input: patch }) } }] }, finish_reason: 'tool_calls' }] }]) }) } });
+  const received = events(res);
+  assert.equal(received.find((event) => event.type === 'response.custom_tool_call_input.delta').delta, patch);
+  assert.equal(received.find((event) => event.type === 'response.custom_tool_call_input.done').input, patch);
+  assert.equal(received.at(-1).response.output[0].namespace, 'functions');
+});
+
+test('an invalid tool batch exposes no executable calls', async () => {
+  const res = sink();
+  await bridgeResponses({ input: { model: 'nim', input: 'Edit', tools: [{ type: 'function', name: 'edit' }] }, res,
+    router: { openCompletion: async () => ({ route: { name: 'NIM fixture' }, response: stream([{ choices: [{ delta: { tool_calls: [
+      { index: 0, id: 'valid', function: { name: 'edit', arguments: '{}' } },
+      { index: 1, id: 'invalid', function: { name: 'edit', arguments: '{' } },
+    ] }, finish_reason: 'tool_calls' }] }]) }) } });
+  assert.equal(events(res).at(-1).type, 'response.failed');
+  assert.equal(events(res).filter((event) => event.type === 'response.output_item.done').length, 0);
+});
 
 test('bridge streams text and emits a completed Responses envelope', async () => {
   const res = sink();

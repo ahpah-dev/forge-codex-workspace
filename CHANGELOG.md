@@ -2,6 +2,8 @@
 
 ## 1.0.15
 
+- Added explicit file creation and exact-text edit tools for NVIDIA and other routed models whose runtime lacks a native patch tool. File operations use the existing runtime sandbox and approval controls, and custom patch calls now emit complete input events.
+- Fixed NVIDIA GPT-OSS tool names containing a Harmony channel suffix; verified file creation and editing against the live NVIDIA API.
 - Increased routed model output budgets and added up to two automatic recovery attempts for length-limited responses. Incomplete tool calls are discarded and regenerated; completed tools are not replayed.
 - Fixed NVIDIA NIM and other Chat Completions providers with a local API adapter, automatic NVIDIA/OpenRouter detection, and provider API format selection. Existing provider sessions reconnect with the current configuration.
 - Added a draggable chatbox height grip and saved Rounded, Pill, and Square shapes in Appearance settings, with subtle interface refinements.

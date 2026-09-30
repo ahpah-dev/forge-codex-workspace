@@ -20,8 +20,27 @@ export function toChatRequest(input) {
     } });
   }
   for (const tool of input.tools || []) register(tool);
+  // Unknown model families may lack Codex's native patch tool. Provide simple
+  // file operations through its existing shell tool, retaining runtime approvals
+  // and filesystem sandboxing rather than writing from this HTTP adapter.
+  const shell = [...toolMap.values()].find((tool) => !tool.custom && tool.name === 'exec_command');
+  if (shell && ![...toolMap.values()].some((tool) => tool.name === 'apply_patch')) {
+    for (const operation of ['write', 'edit']) {
+      const name = `forge_${operation}_file`;
+      if (toolMap.has(name)) continue;
+      toolMap.set(name, { ...shell, fileOperation: operation });
+      const properties = operation === 'write'
+        ? { path: { type: 'string' }, content: { type: 'string' } }
+        : { path: { type: 'string' }, old_text: { type: 'string' }, new_text: { type: 'string' } };
+      tools.push({ type: 'function', function: { name,
+        description: operation === 'write' ? 'Save exact UTF-8 content to a file in the current workspace; creates parent folders. Read existing files before overwriting.' : 'Edit an existing UTF-8 file by replacing exactly one matching text segment. Read the file first. Fails if the old text is absent or ambiguous.',
+        parameters: { type: 'object', properties, required: Object.keys(properties), additionalProperties: false },
+      } });
+    }
+  }
   const messages = [];
   if (input.instructions) messages.push({ role: 'system', content: String(input.instructions) });
+  if (shell) messages.push({ role: 'system', content: 'Only call tools actually listed in this request. Use forge_write_file and forge_edit_file when provided to save files, or the available shell tool. Do not invent apply_patch calls when it is absent. A successful tool result confirms a save; text describing code does not save it. Verify saved files before claiming completion. Free-form tools exposed as JSON require their exact original input in the input string.' });
   const items = typeof input.input === 'string' ? [{ role: 'user', content: input.input }] : input.input || [];
   for (const item of items) {
     if (item.type === 'reasoning') continue;
@@ -54,6 +73,20 @@ export function toChatRequest(input) {
     messages.push({ role, content: normalized });
   }
   return { request: { messages, ...(tools.length ? { tools, tool_choice: 'auto', parallel_tool_calls: false } : {}) }, toolMap };
+}
+
+export function fileOperationArguments(operation, args) {
+  for (const field of operation === 'write' ? ['path', 'content'] : ['path', 'old_text', 'new_text']) {
+    if (typeof args[field] !== 'string') throw new Error(`File tool requires a string ${field}.`);
+  }
+  if (!args.path.trim() || args.path.includes('\0')) throw new Error('File tool requires a valid path.');
+  if (operation === 'edit' && !args.old_text) throw new Error('File edit requires nonempty old_text.');
+  const payload = Buffer.from(JSON.stringify(args), 'utf8').toString('base64');
+  const script = `$ErrorActionPreference='Stop'; $a=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${payload}')) | ConvertFrom-Json; $p=[IO.Path]::GetFullPath($a.path); ` + (operation === 'write'
+    ? '$content=$a.content; [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($p)) | Out-Null; '
+    : "$content=[IO.File]::ReadAllText($p); $at=$content.IndexOf($a.old_text,[StringComparison]::Ordinal); if($at -lt 0){throw 'Old text was not found; read the file again'}; if($content.IndexOf($a.old_text,$at+$a.old_text.Length,[StringComparison]::Ordinal) -ge 0){throw 'Old text is ambiguous; provide a larger unique segment'}; $content=$content.Substring(0,$at)+$a.new_text+$content.Substring($at+$a.old_text.Length); ")
+    + "[IO.File]::WriteAllText($p,$content,(New-Object Text.UTF8Encoding($false))); [Console]::WriteLine('Saved: '+$p);";
+  return { cmd: `powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(script, 'utf16le').toString('base64')}`, max_output_tokens: 1000 };
 }
 
 export function providerApiFormat(provider) {
@@ -228,21 +261,29 @@ export async function bridgeResponses({ input, res, router, signal }) {
       send('response.output_item.done', { output_index: output.indexOf(message), item: message });
     }
     if (!['stop', 'tool_calls', 'function_call'].includes(finishReason)) throw new Error(`${route.name} stopped with ${finishReason}. Partial output was retained; incomplete tool calls were not executed.`);
-    for (const call of calls.values()) {
-      const tool = toolMap.get(call.name);
-      if (!tool || !call.id) throw new Error('The model returned an unknown or incomplete tool call.');
+    // Validate the whole batch before exposing any executable tool calls.
+    const completedCalls = [...calls.values()].map((call) => {
+      // Some NIM GPT-OSS streams leak a Harmony channel suffix into the
+      // function name. Accept only that known suffix, never an arbitrary tool.
+      const name = call.name.replace(/<\|channel\|>(?:analysis|commentary|final)$/, '');
+      const tool = toolMap.get(name);
+      if (!tool || !call.id) throw new Error(`The model returned an unknown or incomplete tool call (${String(call.name).slice(0, 64)}).`);
       const args = JSON.parse(call.arguments || '{}');
       if (tool.custom && typeof args.input !== 'string') throw new Error('A free-form tool call was missing its input.');
       const item = {
         id: 'fc_' + randomUUID(), type: tool.custom ? 'custom_tool_call' : 'function_call',
         call_id: call.id, name: tool.name, ...(tool.namespace ? { namespace: tool.namespace } : {}), status: 'completed',
-        ...(tool.custom ? { input: args.input } : { arguments: call.arguments || '{}' }),
+        ...(tool.custom ? { input: args.input } : { arguments: tool.fileOperation ? JSON.stringify(fileOperationArguments(tool.fileOperation, args)) : call.arguments || '{}' }),
       };
+      return item;
+    });
+    for (const item of completedCalls) {
+      const custom = item.type === 'custom_tool_call';
       output.push(item);
       const output_index = output.length - 1;
-      send('response.output_item.added', { output_index, item: { ...item, status: 'in_progress', ...(tool.custom ? { input: '' } : { arguments: '' }) } });
-      if (!tool.custom) send('response.function_call_arguments.delta', { item_id: item.id, output_index, delta: item.arguments });
-      if (!tool.custom) send('response.function_call_arguments.done', { item_id: item.id, output_index, arguments: item.arguments });
+      send('response.output_item.added', { output_index, item: { ...item, status: 'in_progress', ...(custom ? { input: '' } : { arguments: '' }) } });
+      send(custom ? 'response.custom_tool_call_input.delta' : 'response.function_call_arguments.delta', { item_id: item.id, output_index, delta: custom ? item.input : item.arguments });
+      send(custom ? 'response.custom_tool_call_input.done' : 'response.function_call_arguments.done', { item_id: item.id, output_index, ...(custom ? { input: item.input } : { arguments: item.arguments }) });
       send('response.output_item.done', { output_index, item });
     }
     send('response.completed', { response: envelope('completed') });

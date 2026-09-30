@@ -25,10 +25,17 @@ test('real Codex runtime executes adapted file tools and accepts native planning
     observedTools = request.tools?.map((tool) => tool.function.name) || [];
     let chunks;
     if (!request.messages.some((message) => message.role === 'tool')) {
+      if (phase === 'patch') {
+        const name = observedTools.find((tool) => tool === 'forge_edit_file');
+        assert.ok(name, `Expected forge_edit_file in ${observedTools.join(', ')}`);
+        const patch = { path: 'marker.txt', old_text: 'bridge works', new_text: 'patch works' };
+        chunks = [{ choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_patch', function: { name, arguments: JSON.stringify(patch) } }, { index: 1, id: 'call_write', function: { name: 'forge_write_file', arguments: JSON.stringify({ path: 'created.txt', content: 'created by patch' }) } }] }, finish_reason: 'tool_calls' }] }];
+      } else {
       const name = observedTools.find((tool) => /exec_command$/.test(tool));
       assert.ok(name, `Expected exec_command in ${observedTools.join(', ')}`);
       const cmd = phase === 'plan' ? "Set-Content -LiteralPath 'plan-must-not-write.txt' -Value 'forbidden'" : "Set-Content -LiteralPath 'marker.txt' -Value 'bridge works'";
       chunks = [{ choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_fixture', function: { name, arguments: JSON.stringify({ cmd, workdir: workspace, max_output_tokens: 1000 }) } }] }, finish_reason: 'tool_calls' }] }];
+      }
     } else {
       chunks = [{ choices: [{ delta: { content: phase === 'plan' ? '<proposed_plan>\nInspect the project, then implement the requested change.\n</proposed_plan>' : 'The marker file was created.' }, finish_reason: 'stop' }] }];
     }
@@ -88,6 +95,14 @@ test('real Codex runtime executes adapted file tools and accepts native planning
     const codeResult = await complete(coding.thread.id);
     assert.equal(codeResult.params.turn.status, 'completed', JSON.stringify(codeResult.params.turn.error));
     assert.equal((await readFile(path.join(workspace, 'marker.txt'), 'utf8')).trim(), 'bridge works');
+    phase = 'patch';
+    const patching = await rpc('thread/start', { cwd: workspace, model: 'auto-free', modelProvider: 'forge_fixture', sandbox: 'workspace-write', approvalPolicy: 'on-request', config });
+    await rpc('turn/start', { threadId: patching.thread.id, input: [{ type: 'text', text: 'Edit marker.txt and create created.txt using apply_patch.' }], sandboxPolicy: { type: 'workspaceWrite', writableRoots: [workspace], networkAccess: false } });
+    const patchResult = await complete(patching.thread.id);
+    assert.equal(patchResult.params.turn.status, 'completed', JSON.stringify(patchResult.params.turn.error));
+    assert.equal((await readFile(path.join(workspace, 'marker.txt'), 'utf8')).trim(), 'patch works');
+    assert.equal((await readFile(path.join(workspace, 'created.txt'), 'utf8')).trim(), 'created by patch');
+
     phase = 'plan';
     const planning = await rpc('thread/start', { cwd: workspace, model: 'auto-free', modelProvider: 'forge_fixture', sandbox: 'read-only', approvalPolicy: 'on-request', config });
     await rpc('turn/start', { threadId: planning.thread.id, input: [{ type: 'text', text: 'Plan a change.' }], sandboxPolicy: { type: 'readOnly', networkAccess: false }, collaborationMode: { mode: 'plan', settings: { model: 'auto-free', reasoning_effort: 'medium', developer_instructions: null } } });
