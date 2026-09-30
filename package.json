@@ -1,6 +1,6 @@
 {
   "name": "forge-codex-workspace",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Forge local desktop coding workspace connected to Codex",
   "author": "Forge",
   "private": true,

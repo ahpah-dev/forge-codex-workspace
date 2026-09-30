@@ -1169,12 +1169,25 @@ function renderContext() {
 }
 
 function markdownInline(text) {
-  let safe = escapeHTML(text);
-  safe = safe.replace(/`([^`]+)`/g, '<code>$1</code>');
+  const fragments = [];
+  const stash = (html) => `\u0001${fragments.push(html) - 1}\u0001`;
+  let source = String(text || '');
+  source = source.replace(/`([^`]+)`/g, (_, code) => stash(`<code>${escapeHTML(code)}</code>`));
+  source = source.replace(/\[([^\]\n]+)\]\s*\\?\(\s*(?:\\?<([^>\n]+)>\\?|([^\s)]+))\s*\\?\)/g, (whole, label, angleTarget, plainTarget) => {
+    const target = String(angleTarget || plainTarget || '').trim().replace(/\\([()<>])/g, '$1');
+    const escapedLabel = escapeHTML(label.trim());
+    if (/^https?:\/\//i.test(target)) return stash(`<a href="${escapeHTML(target)}" target="_blank" rel="noopener noreferrer">${escapedLabel}</a>`);
+    const isLocalPath = /^[a-z]:[\\/]/i.test(target) || /^(?:\\\\|\/|\.\.?[\\/])/.test(target) || !/^[a-z][a-z\d+.-]*:/i.test(target);
+    if (isLocalPath && target && target.length <= 2048 && !/[<>\u0000-\u001f]/.test(target)) {
+      const icon = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 1.75h5l3 3v9.5H4zM9 1.9v3h3M6 8h4M6 10.5h4"/></svg>';
+      return stash(`<a class="file-link-chip" href="#" data-file-path="${escapeHTML(target)}" title="${escapeHTML(target)}"><span class="file-link-icon">${icon}</span><span>${escapedLabel}</span></a>`);
+    }
+    return whole;
+  });
+  let safe = escapeHTML(source);
   safe = safe.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
   safe = safe.replace(/\*([^*]+)\*/g, '<em>$1</em>');
-  safe = safe.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
-  return safe;
+  return safe.replace(/\u0001(\d+)\u0001/g, (_, index) => fragments[Number(index)] || '');
 }
 
 function renderMarkdown(text) {
@@ -2377,6 +2390,29 @@ $('#mode-chat').addEventListener('click', () => setMode('chat'));
 $('#mode-code').addEventListener('click', () => setMode('code'));
 $('#refresh-tree').addEventListener('click', () => { state.treeCache.clear(); loadTree(''); });
 $('#file-search').addEventListener('input', renderContext);
+$('#conversation-scroll').addEventListener('click', (event) => {
+  const link = event.target.closest('a.file-link-chip');
+  if (!link) return;
+  event.preventDefault();
+  if (!state.workspace?.path) { showToast('Open a workspace folder to preview this file.'); return; }
+  const normalize = (value) => String(value || '').replace(/[\\/]+/g, '/').replace(/\/$/, '');
+  const root = normalize(state.workspace.path);
+  const target = normalize(link.dataset.filePath);
+  const isAbsolute = /^[a-z]:\//i.test(target) || target.startsWith('//');
+  let relativePath = target.replace(/^\.\//, '');
+  if (isAbsolute) {
+    if (!target.toLocaleLowerCase().startsWith(root.toLocaleLowerCase() + '/')) {
+      showToast('This file is outside the open workspace.');
+      return;
+    }
+    relativePath = target.slice(root.length + 1);
+  }
+  if (!relativePath || relativePath === '..' || relativePath.startsWith('../')) {
+    showToast('This link does not point to a file in the open workspace.');
+    return;
+  }
+  void openFile(relativePath);
+});
 $('#file-tree').addEventListener('click', async (event) => {
   const row = event.target.closest('[data-path]');
   if (!row) return;

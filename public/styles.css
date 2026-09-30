@@ -289,6 +289,10 @@ button { -webkit-tap-highlight-color: transparent; }
 .assistant-message pre code { color: var(--ink); }
 .assistant-message blockquote { margin: 10px 0; padding-left: 13px; border-left: 2px solid color-mix(in srgb, var(--accent) 35%, var(--line)); color: var(--ink); }
 .assistant-message ul, .assistant-message ol { padding-left: 23px; }
+.assistant-message a.file-link-chip { display: inline-flex; align-items: center; max-width: 100%; margin: 0 2px; padding: 2px 7px 2px 5px; gap: 5px; border: 1px solid var(--line); border-radius: 6px; color: var(--accent); background: var(--code-bg); font-family: var(--font-code); font-size: .88em; line-height: 1.45; text-decoration: none; vertical-align: baseline; transition: border-color .16s ease, background .16s ease, color .16s ease; }
+.assistant-message a.file-link-chip:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); background: var(--accent-soft); text-decoration: none; }
+.file-link-icon { display: inline-grid; place-items: center; flex: 0 0 auto; }
+.file-link-icon svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 1.35; stroke-linecap: round; stroke-linejoin: round; }
 .assistant-progress { display: inline-flex; align-items: center; min-height: 34px; margin: 3px 0 5px; padding: 5px 9px 5px 6px; gap: 8px; border: 1px solid var(--line); border-radius: 999px; color: var(--ink); background: var(--paper); box-shadow: 0 2px 8px color-mix(in srgb, var(--accent) 2%, transparent); vertical-align: middle; animation: progress-in .2s ease-out both; }
 .assistant-progress-mark { width: 21px; height: 21px; flex: 0 0 auto; color: var(--accent); animation: gpt-mark-spin 3.2s cubic-bezier(.45,.05,.55,.95) infinite; transform-origin: center; }
 .assistant-progress-copy { color: var(--ink); font-size: calc(11px * var(--ui-scale)); font-weight: 560; letter-spacing: -.01em; }
