@@ -389,7 +389,11 @@ export function createAnthropicProvider({ dataRoot, publish, executable = 'claud
     }
   }
 
-  async function startTurn({ threadId, text, model, cwd, readOnly = false }) {
+  async function startTurn({ threadId, text, model, cwd, readOnly = false, planningMode = false }) {
+    if (planningMode) {
+      readOnly = true;
+      text = `Planning mode: inspect the project and produce an actionable implementation plan with steps, affected files, tradeoffs, and validation. Ask clarifying questions when needed. Do not edit files or implement the plan.\n\n${text}`;
+    }
     await loadSessions();
     const status = await getStatus();
     if (!status.available) throw new Error('Install Claude Code to connect an Anthropic subscription. Forge uses Anthropic’s official local runtime.');

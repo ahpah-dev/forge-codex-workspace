@@ -8,6 +8,8 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { decryptProviderKey, encryptProviderKey, readEncryptedProviderKeys, writeEncryptedProviderKeys } from './provider-secrets.mjs';
 import { createAnthropicProvider } from './anthropic-provider.mjs';
+import { createFreeRouter, FREE_PROVIDER_ID, FREE_KEY_IDS, isCodexLimitError, exhaustedCodexLimit } from './free-router.mjs';
+import { bridgeResponses } from './responses-bridge.mjs';
 
 const execFileAsync = promisify(execFile);
 const appRoot = path.dirname(fileURLToPath(import.meta.url));
@@ -22,14 +24,18 @@ const codexPrefixArgs = process.env.CODEX_CLI || !existsSync(bundledCodexCli) ? 
 const codexArgs = (args) => [...codexPrefixArgs, ...args];
 const host = '127.0.0.1';
 const sessionToken = randomBytes(32).toString('hex');
+const bridgeToken = randomBytes(32).toString('hex');
 const ignoredFolders = new Set(['.git', 'node_modules', '.next', 'dist', 'build', 'coverage', '.turbo', '.venv', 'venv', '__pycache__']);
-const defaultSettings = { activeWorkspace: '', recentWorkspaces: [], providers: [] };
+const defaultSettings = { activeWorkspace: '', recentWorkspaces: [], providers: [], freeRouting: { enabled: false, codexFallback: false } };
 
 let settings = await loadSettings();
 let activeWorkspace = await normalizeSavedWorkspace(settings.activeWorkspace);
 let port = Number.parseInt(process.env.FORGE_PORT || '4173', 10);
 let initialAppState = null;
 let threadOpenRevision = 0;
+const turnRequests = new Map();
+const turnErrors = new Map();
+const fallbackJobs = new Map();
 
 function json(res, status, payload) {
   const body = JSON.stringify(payload);
@@ -57,7 +63,7 @@ async function loadSettings() {
       baseUrl: String(provider.baseUrl || ''),
       models: Array.isArray(provider.models) ? provider.models.filter((model) => model && /^[\w./:@+-]{1,180}$/.test(model.id || '')).slice(0, 100).map((model) => ({ id: model.id, name: String(model.name || model.id).slice(0, 180) })) : [],
     })) : [];
-    return { ...defaultSettings, ...saved, recentWorkspaces: Array.isArray(saved.recentWorkspaces) ? saved.recentWorkspaces : [], providers };
+    return { ...defaultSettings, ...saved, freeRouting: { enabled: saved.freeRouting?.enabled === true, codexFallback: saved.freeRouting?.codexFallback === true }, recentWorkspaces: Array.isArray(saved.recentWorkspaces) ? saved.recentWorkspaces : [], providers };
   } catch {
     return { ...defaultSettings };
   }
@@ -100,18 +106,28 @@ function normalizeProviderModels(value) {
 function providerIdFromName(value) {
   const id = String(value || '').normalize('NFKD').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
   if (!id) throw new Error('Enter a provider name.');
-  if (['openai', 'anthropic', 'ollama', 'lmstudio'].includes(id)) throw new Error('That ID is reserved by a built-in model provider. Choose another provider name.');
+  if (['openai', 'anthropic', 'ollama', 'lmstudio', FREE_PROVIDER_ID, ...Object.values(FREE_KEY_IDS)].includes(id)) throw new Error('That ID is reserved by a built-in model provider. Choose another provider name.');
   return id;
 }
 
 function publicProviders(encryptedKeys = {}) {
-  return settings.providers.map((provider) => ({
+  const providers = settings.providers.map((provider) => ({
     ...provider,
     authConfigured: typeof encryptedKeys[provider.id] === 'string' && Boolean(encryptedKeys[provider.id]),
   }));
+  if (settings.freeRouting.enabled) providers.push({ id: FREE_PROVIDER_ID, name: 'Free Auto Route', authConfigured: Boolean(encryptedKeys[FREE_KEY_IDS.openrouter] && encryptedKeys[FREE_KEY_IDS.nvidia]), models: [{ id: 'auto-free', name: 'OpenRouter Free Auto Route' }] });
+  return providers;
 }
 
 function providerThreadConfig(provider) {
+  if (provider.id === FREE_PROVIDER_ID) return {
+    web_search: 'disabled',
+    model_providers: { [FREE_PROVIDER_ID]: {
+      name: 'Free Auto Route', base_url: `http://${host}:${port}/internal/free-route`,
+      wire_api: 'responses', requires_openai_auth: false, supports_websockets: false,
+      http_headers: { Authorization: `Bearer ${bridgeToken}` }, request_max_retries: 0, stream_max_retries: 0,
+    } },
+  };
   return {
     model_providers: {
       [provider.id]: {
@@ -475,8 +491,110 @@ codex.subscribe((event) => {
   if (event.type === 'notification' && /^(item\/(started|delta|completed)|turn\/(started|completed|failed|interrupted))$/.test(event.method || '')) {
     invalidateThreadHistory(event.params?.threadId);
   }
+  if (event.type === 'notification' && event.method === 'error' && event.params?.threadId) turnErrors.set(event.params.threadId, event.params.error);
+  if (event.type === 'notification' && event.method === 'turn/completed') {
+    const threadId = event.params?.threadId;
+    const request = turnRequests.get(threadId);
+    const error = event.params?.turn?.error || turnErrors.get(threadId);
+    if (request && request.providerId === 'openai' && settings.freeRouting.codexFallback && settings.freeRouting.enabled
+      && event.params?.turn?.status === 'failed' && isCodexLimitError(error) && !fallbackJobs.has(threadId)) {
+      turnRequests.delete(threadId);
+      turnErrors.delete(threadId);
+      publish({ type: 'notification', method: 'routing/fallback/starting', params: { threadId, reason: 'Codex usage limit reached. Continuing with Free Auto Route.' } });
+      const controller = new AbortController();
+      const job = { controller, newThreadId: null, newTurnId: null };
+      fallbackJobs.set(threadId, job);
+      void continueWithFreeRoute(request, threadId, controller.signal).catch((failure) => {
+        publish({ type: 'notification', method: 'routing/fallback/failed', params: { threadId, message: failure.message } });
+      }).finally(() => fallbackJobs.delete(threadId));
+      return;
+    }
+    turnRequests.delete(threadId);
+    turnErrors.delete(threadId);
+  }
   publish(event);
 });
+
+const freeRouter = createFreeRouter({
+  async getKey(provider) {
+    const keys = await readEncryptedProviderKeys(providerKeysPath);
+    return keys[FREE_KEY_IDS[provider]] ? decryptProviderKey(keys[FREE_KEY_IDS[provider]]) : '';
+  },
+  onRoute(route) { publish({ type: 'notification', method: 'routing/model/selected', params: { route } }); },
+});
+
+function freeRoutingStatus(keys) {
+  return { ...settings.freeRouting, openrouterConfigured: Boolean(keys[FREE_KEY_IDS.openrouter]), nvidiaConfigured: Boolean(keys[FREE_KEY_IDS.nvidia]), ...freeRouter.status() };
+}
+
+async function startCodexTask(input, cwd, { announceContinuation, signal } = {}) {
+  const providerId = String(input.providerId || 'openai');
+  const provider = providerId === FREE_PROVIDER_ID ? { id: FREE_PROVIDER_ID, name: 'Free Auto Route', models: [{ id: 'auto-free' }] }
+    : providerId === 'openai' ? null : settings.providers.find((item) => item.id === providerId);
+  if (providerId !== 'openai' && !provider) throw new Error('That provider is no longer configured. Refresh the model list.');
+  const model = providerId === FREE_PROVIDER_ID ? 'auto-free' : provider ? String(input.providerModel || '') : String(input.model || '');
+  if (provider && !provider.models.some((item) => item.id === model)) throw new Error('Choose a model listed under this provider.');
+  const encryptedKeys = await readEncryptedProviderKeys(providerKeysPath);
+  if (providerId === FREE_PROVIDER_ID) {
+    if (!settings.freeRouting.enabled || !encryptedKeys[FREE_KEY_IDS.openrouter] || !encryptedKeys[FREE_KEY_IDS.nvidia]) throw new Error('Enable Free Auto Route and save both API keys in Settings first.');
+  } else if (provider && !encryptedKeys[providerId]) throw new Error(`Add an API key for ${provider.name} in provider settings.`);
+  if (!provider && !(await getAccount()).connected) throw new Error('Sign in to ChatGPT before starting a Codex task.');
+  let threadId = String(input.threadId || '');
+  if (threadId) {
+    const history = await getThreadHistory(threadId);
+    if ((history.thread.modelProvider || 'openai') !== providerId) throw new Error('Start a new session to switch providers.');
+  }
+  const readOnly = Boolean(input.readOnly || input.planningMode);
+  if (signal?.aborted) throw new Error('The continuation was stopped.');
+  if (!threadId) {
+    const startParams = { cwd, model, sandbox: readOnly ? 'read-only' : 'workspace-write', approvalPolicy: 'on-request', personality: 'pragmatic' };
+    if (provider) { startParams.modelProvider = provider.id; startParams.config = providerThreadConfig(provider); }
+    threadId = (await codex.rpc('thread/start', startParams)).thread.id;
+    invalidateThreadHistory(threadId);
+    resumedThreads.add(threadId);
+  } else await resumeThread(threadId);
+  if (signal?.aborted) throw new Error('The continuation was stopped.');
+  if (input.continuationContext) {
+    await codex.rpc('thread/inject_items', { threadId, items: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: input.continuationContext }] }] });
+    settings.continuations ||= {};
+    settings.continuations[threadId] = { fromThreadId: input.continuedFrom || announceContinuation, createdAt: Date.now() };
+    await saveSettings();
+  }
+  if (announceContinuation) {
+    const job = fallbackJobs.get(announceContinuation);
+    if (job) job.newThreadId = threadId;
+    publish({ type: 'notification', method: 'routing/fallback/started', params: { threadId: announceContinuation, newThreadId: threadId, providerId } });
+  }
+  const effort = String(input.effort || 'medium');
+  turnRequests.set(threadId, { ...input, providerId, cwd, threadId });
+  turnErrors.delete(threadId);
+  const turn = await codex.rpc('turn/start', {
+    threadId, cwd, input: [{ type: 'text', text: input.text }], model: model || undefined, effort,
+    collaborationMode: { mode: input.planningMode ? 'plan' : 'default', settings: { model, reasoning_effort: effort, developer_instructions: null } },
+    sandboxPolicy: readOnly ? { type: 'readOnly', networkAccess: false } : { type: 'workspaceWrite', writableRoots: [cwd], networkAccess: false },
+  });
+  const turnId = turn.turn?.id || null;
+  if (announceContinuation) {
+    const job = fallbackJobs.get(announceContinuation);
+    if (job) job.newTurnId = turnId;
+    if (signal?.aborted && turnId) await codex.rpc('turn/interrupt', { threadId, turnId });
+  }
+  return { threadId, turnId, providerId, ...(announceContinuation ? { continuedFrom: announceContinuation } : {}) };
+}
+
+async function continuationText(threadId, input) {
+  const history = await getThreadHistory(threadId);
+  const context = history.messages.filter((message) => message.text || message.command || message.changes?.length).map((message) => {
+    if (message.role === 'activity') return `[Completed activity: ${message.status || 'unknown'}] ${message.command || JSON.stringify(message.changes)}\n${message.output || ''}`;
+    return `[${message.role}] ${message.text || ''}`;
+  }).join('\n\n').slice(-65000);
+  return `Continue this task after the original Codex session reached its usage limit. Inspect the current files before making edits. Completed operations may already have changed the workspace; do not replay them blindly. Preserve the user's requested ${input.planningMode ? 'planning (read only)' : input.readOnly ? 'read only' : 'coding'} mode.\n\nPrevious session context:\n${context}\n\nCurrent user request:\n${input.text}`;
+}
+
+async function continueWithFreeRoute(input, threadId, signal) {
+  const text = await continuationText(threadId, input);
+  return startCodexTask({ ...input, threadId: '', continuationContext: text, continuedFrom: threadId, providerId: FREE_PROVIDER_ID, providerModel: 'auto-free' }, input.cwd, { announceContinuation: threadId, signal });
+}
 
 const anthropic = createAnthropicProvider({
   dataRoot,
@@ -554,6 +672,7 @@ async function getAppState() {
     codexCli,
     models,
     providers: publicProviders(encryptedProviderKeys),
+    freeRouting: freeRoutingStatus(encryptedProviderKeys),
     anthropic: anthropicStatus,
     limits,
     workspace: activeWorkspace ? { path: activeWorkspace, name: path.basename(activeWorkspace) || activeWorkspace } : null,
@@ -609,7 +728,9 @@ async function readThreadHistory(threadId) {
       }
     }
   }
-  return { thread: { id: thread.id, name: thread.name || thread.preview || 'Untitled session', cwd: thread.cwd, modelProvider: thread.modelProvider || 'openai' }, messages };
+  const continuedFrom = settings.continuations?.[threadId]?.fromThreadId || null;
+  if (continuedFrom) messages.unshift({ role: 'routing', text: 'This Free Auto Route session continues a previous Codex session after its usage limit.', continuedFrom });
+  return { thread: { id: thread.id, name: thread.name || thread.preview || 'Untitled session', cwd: thread.cwd, modelProvider: thread.modelProvider || 'openai', continuedFrom }, messages };
 }
 
 async function getThreadHistory(threadId) {
@@ -648,7 +769,7 @@ function resumeThread(threadId) {
   if (resumedThreads.has(threadId)) return Promise.resolve(null);
   const pending = threadResumeLoads.get(threadId);
   if (pending) return pending;
-  const load = codex.rpc('thread/resume', { threadId }).then((result) => {
+  const load = getThreadHistory(threadId).then((history) => codex.rpc('thread/resume', { threadId, ...(history.thread.modelProvider === FREE_PROVIDER_ID ? { config: providerThreadConfig({ id: FREE_PROVIDER_ID }) } : {}) })).then((result) => {
     resumedThreads.add(threadId);
     return result;
   }).finally(() => {
@@ -709,6 +830,27 @@ async function handleApi(req, res, url) {
       if (route === '/api/workspaces/open') {
         const workspace = await setWorkspace(input.path);
         return json(res, 200, { workspace });
+      }
+      if (route === '/api/routing/save') {
+        const keys = await readEncryptedProviderKeys(providerKeysPath);
+        for (const provider of ['openrouter', 'nvidia']) {
+          const key = String(input[`${provider}Key`] || '').trim();
+          if (key.length > 4096) throw new Error('API keys must be 4,096 characters or fewer.');
+          if (key) keys[FREE_KEY_IDS[provider]] = await encryptProviderKey(key);
+        }
+        const enabled = input.enabled === true;
+        if (enabled && (!keys[FREE_KEY_IDS.openrouter] || !keys[FREE_KEY_IDS.nvidia])) throw new Error('Save both your OpenRouter and NVIDIA NIM API keys to enable Free Auto Route.');
+        await writeEncryptedProviderKeys(providerKeysPath, keys);
+        settings.freeRouting = { enabled, codexFallback: enabled && input.codexFallback === true };
+        await saveSettings();
+        freeRouter.reset();
+        initialAppState = null;
+        return json(res, 200, { freeRouting: freeRoutingStatus(keys), providers: publicProviders(keys) });
+      }
+      if (route === '/api/routing/discover') {
+        freeRouter.reset();
+        const results = await Promise.allSettled([freeRouter.catalog('openrouter', { force: true }), freeRouter.catalog('nvidia', { force: true })]);
+        return json(res, 200, { catalogs: results.map((result, index) => ({ provider: index ? 'nvidia' : 'openrouter', ...(result.status === 'fulfilled' ? { count: result.value.length, model: result.value[0].id, name: result.value[0].name || result.value[0].id } : { error: result.reason.message }) })) });
       }
       if (route === '/api/providers/discover') {
         const baseUrl = normalizeProviderBaseUrl(input.baseUrl);
@@ -805,56 +947,38 @@ async function handleApi(req, res, url) {
             model: String(input.providerModel || ''),
             cwd: activeWorkspace,
             readOnly: Boolean(input.readOnly),
+            planningMode: Boolean(input.planningMode),
           });
           return json(res, 200, { ...result, providerId });
         }
-        const account = await getAccount();
-        if (!account.connected) throw new Error('Sign in to ChatGPT before starting a Codex task.');
-        const provider = providerId === 'openai' ? null : settings.providers.find((item) => item.id === providerId);
-        if (providerId !== 'openai' && !provider) throw new Error('That provider is no longer configured. Refresh the model list and try again.');
-        const model = provider ? String(input.providerModel || '') : String(input.model || '');
-        if (provider && !provider.models.some((item) => item.id === model)) throw new Error('Choose a model listed under this provider.');
-        if (provider) {
-          const encryptedKeys = await readEncryptedProviderKeys(providerKeysPath);
-          if (!encryptedKeys[provider.id]) throw new Error(`Add an API key for ${provider.name} in provider settings.`);
-        }
-        let threadId = String(input.threadId || '');
-        if (threadId) {
-          const history = await getThreadHistory(threadId);
-          const existingProviderId = history.thread.modelProvider || 'openai';
-          if (existingProviderId !== providerId) throw new Error('A session keeps the provider it started with. Start a new session to switch providers.');
-        }
-        if (!threadId) {
-          const startParams = {
-            cwd: activeWorkspace,
-            model,
-            sandbox: input.readOnly ? 'read-only' : 'workspace-write',
-            approvalPolicy: 'on-request',
-            personality: 'pragmatic',
-          };
-          if (provider) {
-            startParams.modelProvider = provider.id;
-            startParams.config = providerThreadConfig(provider);
+        let task = { ...input, text, providerId };
+        let continuedFrom = null;
+        if (providerId === 'openai' && settings.freeRouting.enabled && settings.freeRouting.codexFallback) {
+          const limits = await codex.rpc('account/rateLimits/read', {}).catch(() => null);
+          if (exhaustedCodexLimit(limits?.rateLimitsByLimitId || limits?.rateLimits)) {
+            continuedFrom = String(input.threadId || '') || null;
+            const contextualText = continuedFrom ? await continuationText(continuedFrom, task) : text;
+            task = { ...task, continuationContext: continuedFrom ? contextualText : '', continuedFrom, providerId: FREE_PROVIDER_ID, providerModel: 'auto-free', threadId: '' };
           }
-          const started = await codex.rpc('thread/start', startParams);
-          threadId = started.thread.id;
-          invalidateThreadHistory(threadId);
         }
-        if (input.threadId) await resumeThread(threadId).catch(() => null);
-        const turn = await codex.rpc('turn/start', {
-          threadId,
-          cwd: activeWorkspace,
-          input: [{ type: 'text', text }],
-          model: model || undefined,
-          effort: String(input.effort || '') || undefined,
-          sandboxPolicy: input.readOnly
-            ? { type: 'readOnly', networkAccess: false }
-            : { type: 'workspaceWrite', writableRoots: [activeWorkspace], networkAccess: false },
-        });
-        return json(res, 200, { threadId, turnId: turn.turn?.id || null, providerId });
+        try {
+          const result = await startCodexTask(task, activeWorkspace);
+          return json(res, 200, { ...result, continuedFrom });
+        } catch (error) {
+          if (task.providerId !== 'openai' || !settings.freeRouting.enabled || !settings.freeRouting.codexFallback || !isCodexLimitError(error)) throw error;
+          const contextualText = input.threadId ? await continuationText(input.threadId, task) : text;
+          const result = await startCodexTask({ ...task, continuationContext: input.threadId ? contextualText : '', continuedFrom: input.threadId || null, providerId: FREE_PROVIDER_ID, providerModel: 'auto-free', threadId: '' }, activeWorkspace);
+          return json(res, 200, { ...result, continuedFrom: input.threadId || null });
+        }
       }
       if (route === '/api/interrupt') {
         const threadId = String(input.threadId || '');
+        const fallback = fallbackJobs.get(threadId);
+        if (fallback) {
+          fallback.controller.abort();
+          if (fallback.newThreadId && fallback.newTurnId) await codex.rpc('turn/interrupt', { threadId: fallback.newThreadId, turnId: fallback.newTurnId });
+          return json(res, 200, { ok: true });
+        }
         if (anthropic.owns(threadId)) await anthropic.interrupt(threadId);
         else await codex.rpc('turn/interrupt', { threadId, turnId: String(input.turnId || '') });
         return json(res, 200, { ok: true });
@@ -897,6 +1021,20 @@ const mimeTypes = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; char
 const httpServer = createServer(async (req, res) => {
   setSecurityHeaders(res);
   const url = new URL(req.url || '/', `http://${host}:${port}`);
+  if (url.pathname === '/internal/free-route/responses') {
+    if (req.method !== 'POST') return json(res, 405, { error: { message: 'Method not allowed.' } });
+    if (req.headers.authorization !== `Bearer ${bridgeToken}` || req.headers.origin) return json(res, 403, { error: { message: 'Invalid local inference session.' } });
+    const controller = new AbortController();
+    res.on('close', () => controller.abort());
+    try {
+      const input = await bodyJson(req);
+      await bridgeResponses({ input, res, router: freeRouter, signal: AbortSignal.any([controller.signal, AbortSignal.timeout(180000)]) });
+    } catch (error) {
+      if (!res.headersSent) return json(res, 502, { error: { code: 'routing_unavailable', message: error.message } });
+      res.end();
+    }
+    return;
+  }
   if (url.pathname.startsWith('/api/')) return handleApi(req, res, url);
   if (req.method !== 'GET' && req.method !== 'HEAD') return json(res, 405, { error: 'Method not allowed.' });
   let assetPath = url.pathname === '/' ? 'index.html' : decodeURIComponent(url.pathname).replace(/^\/+/, '');

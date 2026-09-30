@@ -42,6 +42,10 @@ const state = {
   modelId: localStorage.getItem('forge.model') || '',
   effort: localStorage.getItem('forge.effort') || 'medium',
   autoModelRouting: localStorage.getItem('forge.auto-model-routing') === 'true',
+  freeRouting: { enabled: false, codexFallback: false },
+  routingDraftDirty: false,
+  routingBusy: false,
+  fallbackSourceThreadId: null,
   mode: 'code',
   preferredAccess: localStorage.getItem('forge.access') || 'write',
 };
@@ -435,7 +439,9 @@ function renderAccount() {
   }
   if (connected && selectedModel?.providerId) {
     const provider = state.providers.find((item) => item.id === selectedModel.providerId);
-    $('#composer-usage').textContent = `${provider?.name || 'Custom provider'} billing · ChatGPT stays connected`;
+    $('#composer-usage').textContent = selectedModel.providerId === 'forge-free'
+      ? state.freeRouting.lastRoute ? `${state.freeRouting.lastRoute.provider === 'nvidia' ? 'NIM' : 'Free'} · ${state.freeRouting.lastRoute.name}` : 'OpenRouter free → NVIDIA NIM'
+      : `${provider?.name || 'Custom provider'} billing · ChatGPT stays connected`;
   } else {
     $('#composer-usage').textContent = connected
       ? codexPercent === null ? 'Codex plan limits apply' : `${codexPercent}% of Codex limit used`
@@ -463,6 +469,93 @@ function renderModelNotice() {
   }
   notice.title = $('#model-update-copy').textContent;
   notice.setAttribute('aria-label', `${$('#model-update-title').textContent}. ${notice.title}`);
+}
+
+function renderFreeRoutingSettings() {
+  const route = state.freeRouting;
+  if (!state.routingDraftDirty) {
+    $('#free-routing-enabled').checked = Boolean(route.enabled);
+    $('#codex-free-fallback').checked = Boolean(route.codexFallback);
+  }
+  $('#routing-openrouter-status').textContent = route.openrouterConfigured ? 'Saved securely' : 'Required';
+  $('#routing-nvidia-status').textContent = route.nvidiaConfigured ? 'Saved securely' : 'Required';
+  $('#routing-openrouter-key').placeholder = route.openrouterConfigured ? 'Leave blank to keep saved key' : 'Enter OpenRouter key';
+  $('#routing-nvidia-key').placeholder = route.nvidiaConfigured ? 'Leave blank to keep saved key' : 'Enter NVIDIA key';
+  $('#codex-free-fallback').disabled = !$('#free-routing-enabled').checked || state.routingBusy;
+  $('#routing-discover').disabled = state.routingBusy || !route.openrouterConfigured || !route.nvidiaConfigured;
+  $('#routing-save').disabled = state.routingBusy;
+  $('#routing-use').hidden = !route.enabled;
+  if (!state.routingDraftDirty && !state.routingBusy && $('#routing-status').textContent === 'Save both API keys to get started.' && route.openrouterConfigured && route.nvidiaConfigured) $('#routing-status').textContent = route.enabled ? 'Free Auto Route is ready in your model picker.' : 'Both keys are saved. Enable the route and save to use it.';
+}
+
+function selectFreeRouteModel() {
+  const model = state.models.find((item) => item.providerId === 'forge-free');
+  if (!model) return;
+  state.modelId = model.id;
+  localStorage.setItem('forge.model', model.id);
+  renderModels();
+  renderAccount();
+}
+
+async function saveFreeRouting() {
+  state.routingBusy = true;
+  const status = $('#routing-status');
+  status.classList.remove('is-error');
+  status.textContent = 'Encrypting and saving your routing settings…';
+  renderFreeRoutingSettings();
+  try {
+    const result = await api('/api/routing/save', { method: 'POST', body: {
+      enabled: $('#free-routing-enabled').checked,
+      codexFallback: $('#codex-free-fallback').checked,
+      openrouterKey: $('#routing-openrouter-key').value,
+      nvidiaKey: $('#routing-nvidia-key').value,
+    } });
+    state.freeRouting = result.freeRouting;
+    state.providers = result.providers;
+    state.routingDraftDirty = false;
+    $('#routing-openrouter-key').value = '';
+    $('#routing-nvidia-key').value = '';
+    status.textContent = state.freeRouting.enabled ? `Saved · Free Auto Route is available in your model picker.${state.freeRouting.codexFallback ? ' Codex limit fallback is on.' : ''}` : 'Saved · Free Auto Route is off. Your keys remain encrypted on this device.';
+    await refreshState({ quiet: true });
+  } catch (error) {
+    status.classList.add('is-error');
+    status.textContent = error.message;
+  } finally {
+    state.routingBusy = false;
+    renderFreeRoutingSettings();
+  }
+}
+
+async function discoverFreeRouting() {
+  state.routingBusy = true;
+  const status = $('#routing-status');
+  status.classList.remove('is-error');
+  status.textContent = 'Checking the current OpenRouter and NVIDIA catalogs…';
+  renderFreeRoutingSettings();
+  try {
+    const result = await api('/api/routing/discover', { method: 'POST', body: {} });
+    const host = $('#routing-catalogs');
+    host.replaceChildren();
+    for (const catalog of result.catalogs) {
+      const row = document.createElement('div');
+      row.className = 'routing-catalog-row';
+      const name = document.createElement('strong');
+      name.textContent = catalog.provider === 'openrouter' ? 'OpenRouter free' : 'NVIDIA NIM';
+      const detail = document.createElement('span');
+      detail.textContent = catalog.error || `${catalog.name} · ${catalog.count} eligible models`;
+      detail.title = catalog.model || catalog.error;
+      row.append(name, detail);
+      host.append(row);
+    }
+    host.hidden = false;
+    status.textContent = result.catalogs.some((catalog) => catalog.error) ? 'Some providers need attention. See the results below.' : 'Both catalogs are ready. Models are refreshed automatically every ten minutes.';
+  } catch (error) {
+    status.classList.add('is-error');
+    status.textContent = error.message;
+  } finally {
+    state.routingBusy = false;
+    renderFreeRoutingSettings();
+  }
 }
 
 function renderWorkspace() {
@@ -580,6 +673,7 @@ function renderModels() {
 }
 
 function modelFamilyLabel(model) {
+  if (model.providerId === 'forge-free') return 'AUTO · OPENROUTER FREE → NVIDIA NIM';
   if (model.providerId === 'anthropic') return 'ANTHROPIC · CLAUDE CODE';
   if (model.providerId) return state.providers.find((provider) => provider.id === model.providerId)?.name?.toUpperCase() || 'CUSTOM PROVIDER';
   const family = String(model.id || '').split('-').slice(0, 2).join('-').toUpperCase();
@@ -965,6 +1059,7 @@ function renderAll() {
   renderThreads();
   renderContext();
   renderSurface();
+  renderFreeRoutingSettings();
 }
 
 async function refreshState({ quiet = false } = {}) {
@@ -973,6 +1068,7 @@ async function refreshState({ quiet = false } = {}) {
     state.account = snapshot.account;
     state.codexCli = snapshot.codexCli || null;
     state.providers = snapshot.providers || [];
+    state.freeRouting = snapshot.freeRouting || { enabled: false, codexFallback: false };
     state.anthropic = snapshot.anthropic || { available: false, connected: false };
     state.models = buildModelCatalog(snapshot.models || [], state.providers, state.anthropic);
     state.limits = snapshot.limits;
@@ -1739,6 +1835,15 @@ function formatActivityFileSummary(changes) {
 }
 
 function renderMessage(message) {
+  if (message.role === 'routing') {
+    const note = document.createElement('div');
+    note.className = 'routing-message';
+    note.append(createModelIcon('auto-free', 'forge-free'));
+    const copy = document.createElement('span');
+    copy.textContent = message.text;
+    note.append(copy);
+    return note;
+  }
   if (message.role === 'user') {
     const user = document.createElement('article');
     user.className = 'message user-message';
@@ -1780,7 +1885,17 @@ function renderMessage(message) {
   wrapper.className = 'message assistant-wrap';
   const content = document.createElement('div');
   content.className = 'assistant-message';
-  content.innerHTML = message.text ? renderMarkdown(message.text) : '';
+  const proposedPlan = /<proposed_plan>/.test(message.text || '');
+  if (proposedPlan) {
+    content.classList.add('proposed-plan');
+    const label = document.createElement('span');
+    label.className = 'plan-kicker';
+    label.textContent = 'Implementation plan';
+    content.append(label);
+    const body = document.createElement('div');
+    body.innerHTML = renderMarkdown(message.text.replace(/<\/?proposed_plan>/g, ''));
+    content.append(body);
+  } else content.innerHTML = message.text ? renderMarkdown(message.text) : '';
   wrapper.append(content);
   return wrapper;
 }
@@ -2073,6 +2188,51 @@ function handleCodexEvent(event) {
   if (event.type !== 'notification') return;
   const params = event.params || {};
   const method = event.method;
+  if (method === 'routing/model/selected') {
+    state.freeRouting.lastRoute = params.route;
+    if (state.threadProviderId === 'forge-free') {
+      const label = `${params.route.provider === 'nvidia' ? 'NVIDIA NIM' : 'OpenRouter free'} · ${params.route.name}`;
+      const previous = state.messages.at(-1);
+      if (previous?.role !== 'routing' || previous.text !== label) state.messages.push({ role: 'routing', text: label });
+      setActivityStatus(`Using ${params.route.name}`);
+      renderAccount();
+      renderSurface();
+    }
+    renderFreeRoutingSettings();
+    return;
+  }
+  if (method === 'routing/fallback/starting') {
+    if (params.threadId !== state.threadId) return;
+    state.fallbackSourceThreadId = params.threadId;
+    state.messages.push({ role: 'routing', text: params.reason });
+    state.isBusy = true;
+    setActivityStatus('Preparing a continuation with Free Auto Route');
+    renderSurface();
+    return;
+  }
+  if (method === 'routing/fallback/started') {
+    if (params.threadId !== state.threadId && params.threadId !== state.fallbackSourceThreadId) return;
+    state.fallbackSourceThreadId = params.threadId;
+    state.threadId = params.newThreadId;
+    state.threadProviderId = 'forge-free';
+    state.activeTurnId = null;
+    state.approvals = [];
+    selectFreeRouteModel();
+    state.messages.push({ role: 'routing', text: 'Continued in a Free Auto Route session with the previous conversation and completed work as context.' });
+    renderSurface();
+    return;
+  }
+  if (method === 'routing/fallback/failed') {
+    if (params.threadId !== state.threadId && params.threadId !== state.fallbackSourceThreadId) return;
+    state.isBusy = false;
+    state.pendingSend = false;
+    state.activeTurnId = null;
+    state.fallbackSourceThreadId = null;
+    for (const message of state.messages) if (message.role === 'assistant') message.pending = false;
+    state.messages.push({ role: 'error', text: params.message });
+    renderSurface();
+    return;
+  }
   if (params.threadId && (/^item\//.test(method || '') || /^turn\//.test(method || ''))) state.threadHistoryCache.delete(params.threadId);
   if (method === 'account/updated' || method === 'account/rateLimits/updated') {
     refreshState({ quiet: true });
@@ -2486,7 +2646,8 @@ async function sendMessage(textOverride, { readOnlyOverride, routingText } = {})
     updateModelRoutingUI();
   }
   const usesAnthropic = selectedModel.providerId === 'anthropic';
-  if (!usesAnthropic && !state.account?.connected) { showToast('Connect your ChatGPT account before sending a Codex task.'); setModal('login-modal', true); return; }
+  if (!usesAnthropic && !selectedModel.providerId && !state.account?.connected) { showToast('Connect your ChatGPT account before sending a Codex task.'); setModal('login-modal', true); return; }
+  if (selectedModel.providerId === 'forge-free' && (!state.freeRouting.openrouterConfigured || !state.freeRouting.nvidiaConfigured)) { showToast('Save both routing API keys in Settings first.'); window.ForgeTheme.open(); return; }
   if (usesAnthropic && !state.anthropic?.available) { showToast('Install Claude Code, then reopen Model providers to connect your Claude subscription.'); setModal('providers-modal', true); return; }
   state.pendingSend = true;
   state.isBusy = true;
@@ -2506,10 +2667,15 @@ async function sendMessage(textOverride, { readOnlyOverride, routingText } = {})
       providerId: selectedModel.providerId || 'openai',
       providerModel: selectedModel.providerModel || '',
       effort: state.effort,
-      readOnly: readOnlyOverride ?? ($('#access-select').value === 'read'),
+      readOnly: $('#access-select').value === 'plan' || (readOnlyOverride ?? ($('#access-select').value === 'read')),
+      planningMode: $('#access-select').value === 'plan',
     } });
     state.threadId = result.threadId;
     state.threadProviderId = result.providerId || 'openai';
+    if (result.providerId === 'forge-free') {
+      selectFreeRouteModel();
+      if (selectedModel.providerId !== 'forge-free') state.messages.push({ role: 'routing', text: 'Codex limit reached. This task is continuing with Free Auto Route.' });
+    }
     state.activeTurnId = result.turnId;
     for (const message of state.messages) if (message.role === 'assistant' && !message.turnId) message.turnId = result.turnId;
     renderSurface();
@@ -2528,6 +2694,11 @@ async function sendMessage(textOverride, { readOnlyOverride, routingText } = {})
 }
 
 async function interruptTurn() {
+  if (state.fallbackSourceThreadId && !state.activeTurnId) {
+    try { await api('/api/interrupt', { method: 'POST', body: { threadId: state.fallbackSourceThreadId } }); }
+    catch (error) { showToast(error.message, 'error'); }
+    return;
+  }
   if (!state.threadId || !state.activeTurnId) { showToast('The current task is still starting.'); return; }
   try {
     await api('/api/interrupt', { method: 'POST', body: { threadId: state.threadId, turnId: state.activeTurnId } });
@@ -2537,10 +2708,11 @@ async function interruptTurn() {
 
 function updateComposerState() {
   const selectedModel = state.models.find((model) => model.id === state.modelId);
-  const canUseSelectedProvider = selectedModel?.providerId === 'anthropic' || state.account?.connected;
+  const canUseSelectedProvider = Boolean(selectedModel?.providerId || state.account?.connected);
   $('#send-button').disabled = !state.workspace || !canUseSelectedProvider || state.isBusy || state.threadLoading;
   $('#stop-turn').hidden = !state.isBusy;
   $('#prompt-input').disabled = state.isBusy || state.threadLoading;
+  $('#plan-build').disabled = state.isBusy || state.threadLoading;
 }
 
 function resizeComposer() {
@@ -2646,6 +2818,19 @@ $('#workspace-card').addEventListener('click', chooseWorkspaceFolder);
 $('#settings-button').setAttribute('aria-label', 'Settings');
 $('#settings-button').title = 'Settings';
 $('#settings-button').addEventListener('click', () => window.ForgeTheme.open());
+$('#routing-save').addEventListener('click', saveFreeRouting);
+$('#routing-discover').addEventListener('click', discoverFreeRouting);
+for (const id of ['free-routing-enabled', 'codex-free-fallback', 'routing-openrouter-key', 'routing-nvidia-key']) {
+  $('#' + id).addEventListener('input', () => { state.routingDraftDirty = true; $('#routing-status').classList.remove('is-error'); $('#routing-status').textContent = 'Unsaved changes · Save routing to apply.'; renderFreeRoutingSettings(); });
+}
+$('#routing-use').addEventListener('click', () => {
+  if (state.isBusy || state.threadLoading) { showToast('Wait for this task to finish before switching providers.'); return; }
+  if (state.threadId && state.threadProviderId !== 'forge-free') newTask();
+  selectFreeRouteModel();
+  window.ForgeTheme.close?.();
+  $('#settings-modal').hidden = true;
+  $('#prompt-input').focus();
+});
 updateModelRoutingUI();
 $('#auto-model-routing').addEventListener('change', (event) => {
   state.autoModelRouting = event.currentTarget.checked;
@@ -2762,9 +2947,11 @@ $('#effort-select').addEventListener('input', updateEffortFromSlider);
 $('#effort-select').addEventListener('change', updateEffortFromSlider);
 function syncAskModeButton() {
   const access = $('#access-select').value;
-  const askMode = access === 'read';
-  $('#ask-mode-label').textContent = askMode ? 'Ask' : 'Code';
-  $('#ask-mode').setAttribute('aria-label', `${askMode ? 'Ask mode' : 'Code mode'}; change work mode`);
+  const label = { read: 'Ask', plan: 'Plan', write: 'Code' }[access] || 'Code';
+  $('#ask-mode-label').textContent = label;
+  $('#ask-mode').setAttribute('aria-label', `${label} mode; change work mode`);
+  $('#ask-mode').classList.toggle('is-planning', access === 'plan');
+  $('#planning-note').hidden = access !== 'plan';
   for (const option of $$('#ask-mode-menu [data-access-mode]')) {
     const selected = option.dataset.accessMode === access;
     option.setAttribute('aria-checked', String(selected));
@@ -2773,7 +2960,7 @@ function syncAskModeButton() {
   }
 }
 function setAskMode(access) {
-  if (!['read', 'write'].includes(access)) return;
+  if (!['read', 'write', 'plan'].includes(access)) return;
   $('#access-select').value = access;
   state.preferredAccess = access;
   localStorage.setItem('forge.access', access);
@@ -2821,6 +3008,7 @@ document.addEventListener('pointerdown', (event) => {
   }
 });
 syncAskModeButton();
+$('#plan-build').addEventListener('click', () => { setAskMode('write'); $('#prompt-input').value = 'Implement the plan we agreed on. Inspect the current files first, then make the changes.'; resizeComposer(); $('#prompt-input').focus(); });
 $('#refresh-sessions').addEventListener('click', () => refreshState({ quiet: true }));
 $('#filter-sessions').addEventListener('click', () => {
   const wrap = $('#session-filter-wrap');

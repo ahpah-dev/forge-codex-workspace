@@ -1,0 +1,29 @@
+.routing-description, .routing-key-note { margin: 0 0 15px; color: var(--muted); font-size: calc(12px * var(--ui-scale)); line-height: 1.65; }
+.routing-badge { border: 1px solid var(--line); padding: 4px 8px; border-radius: 6px; color: var(--accent); background: var(--hover); font-size: 10px; }
+.routing-path { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; }
+.routing-path > span { display: grid; grid-template-columns: 24px 1fr; align-items: center; gap: 3px 8px; flex: 1; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); font-size: 12px; font-weight: 600; }
+.routing-path i { grid-row: span 2; display: grid; place-items: center; width: 23px; height: 23px; border-radius: 6px; background: var(--hover); color: var(--accent); font-size: 10px; font-style: normal; }
+.routing-path small { grid-column: 2; color: var(--muted); font-size: 10px; font-weight: 400; }
+.routing-path > b { color: var(--muted); font-weight: 400; }
+.routing-fallback-toggle { margin-top: 8px; }
+.routing-key-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 18px; }
+.routing-key-grid .dialog-field { margin: 0; }
+.routing-key-grid input { min-width: 0; }
+.routing-key-note { margin-top: 12px; font-size: 10px; }
+.routing-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.routing-status { margin: 12px 0 0; color: var(--muted); font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
+.routing-status.is-error { color: var(--danger, #b44f3c); }
+.routing-catalogs { display: grid; gap: 8px; margin-top: 12px; }
+.routing-catalog-row { display: flex; justify-content: space-between; gap: 14px; padding: 11px 12px; border: 1px solid var(--line); border-radius: 8px; font-size: 11px; }
+.routing-catalog-row span { color: var(--muted); text-align: right; overflow-wrap: anywhere; }
+.planning-note { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 0 0 10px; padding: 11px 14px; border: 1px solid color-mix(in srgb, var(--accent) 23%, var(--line)); border-radius: 11px; background: var(--paper); animation: model-menu-in .18s ease-out; }
+.planning-note > span { display: flex; flex-direction: column; gap: 3px; font-size: 11px; }
+.planning-note small { color: var(--muted); font-size: 10px; }
+.planning-note button { flex: 0 0 auto; padding: 7px 10px; font-size: 10px; }
+.ask-mode.is-planning { color: var(--accent); background: var(--hover); }
+.routing-message { display: flex; gap: 10px; align-items: center; margin: 16px 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--hover); color: var(--muted); font-size: 11px; line-height: 1.6; }
+.routing-message > svg { flex: 0 0 18px; width: 18px; height: 18px; }
+.proposed-plan { padding: 16px 20px; border: 1px solid var(--line); border-radius: 13px; background: var(--paper); }
+.plan-kicker { display: block; margin-bottom: 12px; color: var(--accent); font-size: 10px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
+@media (max-width: 560px) { .routing-key-grid { grid-template-columns: 1fr; } .routing-path { gap: 6px; } .routing-path > span { padding: 9px; grid-template-columns: 18px 1fr; gap: 3px 6px; } .routing-path i { width: 18px; height: 18px; } }
+@media (prefers-reduced-motion: reduce) { .planning-note { animation: none; } }
