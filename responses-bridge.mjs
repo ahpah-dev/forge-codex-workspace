@@ -47,9 +47,47 @@ export function toChatRequest(input) {
       throw new Error(`Free Auto Route cannot translate ${part.type} input.`);
     });
     const role = item.role === 'developer' ? 'system' : item.role || 'user';
-    messages.push({ role, content });
+    // NIM accepts content parts for user messages, but requires plain strings
+    // for system and assistant messages.
+    const normalized = role !== 'user' && Array.isArray(content)
+      ? content.map((part) => part.text || '').join('\n') : content;
+    messages.push({ role, content: normalized });
   }
   return { request: { messages, ...(tools.length ? { tools, tool_choice: 'auto', parallel_tool_calls: false } : {}) }, toolMap };
+}
+
+export function providerApiFormat(provider) {
+  if (provider.apiFormat === 'chat' || provider.apiFormat === 'responses') return provider.apiFormat;
+  try {
+    const hostname = new URL(provider.baseUrl).hostname.toLowerCase();
+    if (hostname === 'integrate.api.nvidia.com' || hostname === 'openrouter.ai') return 'chat';
+  } catch { /* Invalid saved endpoints are rejected before making a request. */ }
+  return 'responses';
+}
+
+export function createChatProviderRouter({ provider, model, key, fetchImpl = fetch }) {
+  return {
+    async openCompletion(request, signal) {
+      const body = { ...request, model, stream: true, max_tokens: 8192 };
+      // parallel_tool_calls is optional and is not accepted by every NIM model.
+      delete body.parallel_tool_calls;
+      const response = await fetchImpl(`${provider.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
+        method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+        body: JSON.stringify(body), signal,
+      });
+      if (!response.ok || response.status === 202) {
+        const detail = await response.json().catch(() => ({}));
+        const explanation = String(detail.error?.message || detail.message || (typeof detail.detail === 'string' ? detail.detail : '')).replaceAll(key, '[redacted]').slice(0, 500);
+        const hint = [401, 403].includes(response.status) ? 'Check your API key and model access in Settings.'
+          : response.status === 429 ? 'The provider rate limit was reached. Wait before retrying.'
+            : [400, 422].includes(response.status) ? 'Choose a model that supports tool calling and this message type.'
+              : response.status === 202 ? 'The provider queued this request instead of returning a live stream. Retry with a streaming model.' : '';
+        throw new Error(`${provider.name} returned HTTP ${response.status}. ${hint}${explanation ? ' ' + explanation : ''}`.trim());
+      }
+      return { response, route: { provider: provider.id, model, name: model } };
+    },
+    rejectRoute(_route, error) { throw error; },
+  };
 }
 
 export async function* chatChunks(body) {

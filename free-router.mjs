@@ -87,6 +87,7 @@ export function createFreeRouter({ getKey, fetchImpl = fetch, onRoute = () => {}
         const key = await getKey(provider);
         const base = provider === 'openrouter' ? OPENROUTER : NVIDIA;
         const body = { ...request, model: model.id, stream: true, max_tokens: Math.min(8192, Number(model.top_provider?.max_completion_tokens || 8192)) };
+        if (provider === 'nvidia') delete body.parallel_tool_calls;
         if (provider === 'openrouter') body.provider = { max_price: { prompt: 0, completion: 0 }, require_parameters: true, allow_fallbacks: true };
         let response;
         try {

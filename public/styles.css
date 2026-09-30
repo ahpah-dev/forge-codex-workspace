@@ -166,7 +166,7 @@ button { -webkit-tap-highlight-color: transparent; }
 .empty-workspace-note { display: none; }
 
 .composer-dock { position: absolute; z-index: 1; top: calc(50% - 93px); left: 50%; width: min(1200px, calc(100% - 84px)); transform: translateX(-50%); }
-.composer-shell { display: flex; flex-direction: column; min-height: 200px; padding: 17px 18px 11px; border: 1.5px solid var(--line); border-radius: 18px; background: var(--paper); box-shadow: 0 2px 4px color-mix(in srgb, var(--accent) 2%, transparent); }
+.composer-shell { position: relative; display: flex; flex-direction: column; min-height: 200px; padding: 17px 18px 11px; border: 1px solid var(--line); border-radius: 18px; background: var(--paper); box-shadow: 0 3px 12px color-mix(in srgb, var(--ink) 4%, transparent); transition: border-color .18s, box-shadow .18s, border-radius .22s; }
 .composer-shell:focus-within { border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 7%, transparent); }
 #prompt-input { width: 100%; min-height: 130px; max-height: 210px; flex: 1; padding: 5px 3px 12px; resize: none; outline: 0; border: 0; color: var(--ink); background: transparent; font-size: calc(16px * var(--ui-scale)); line-height: 1.55; }
 #prompt-input::placeholder { color: var(--muted); opacity: 1; }
@@ -744,3 +744,30 @@ button { -webkit-tap-highlight-color: transparent; }
 .effort-trigger strong { min-width: 54px; }
 .effort-popover { width: min(288px, calc(100vw - 32px)); }
 .effort-popover { translate: var(--effort-offset, 0px) 0; }
+
+/* Small refinements that keep the existing layout and theme. */
+.icon-button, .quiet-button, .idea-card, .thread-row { transition: background .16s, border-color .16s, box-shadow .16s; }
+.activity-card { border-color: color-mix(in srgb, var(--line) 88%, transparent); }
+.composer-resize-grip { position: absolute; z-index: 3; top: -9px; left: 50%; display: grid; place-items: center; width: 56px; height: 18px; transform: translateX(-50%); cursor: ns-resize; touch-action: none; }
+.composer-resize-grip span { width: 32px; height: 3px; border-radius: 3px; background: color-mix(in srgb, var(--muted) 40%, var(--paper)); box-shadow: 0 0 0 3px var(--paper); transition: width .16s, background .16s; }
+.composer-resize-grip:hover span, .composer-resize-grip:focus-visible span, .resizing-composer .composer-resize-grip span { width: 40px; background: var(--accent); }
+.composer-resize-grip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 7px; }
+.resizing-composer, .resizing-composer * { cursor: ns-resize !important; user-select: none !important; }
+html[data-composer-height="manual"] .composer-shell { min-height: 0; }
+html[data-composer-height="manual"] #prompt-input { min-height: 64px; max-height: none; flex: none; }
+html[data-composer-shape="pill"] .composer-shell { border-radius: 999px; padding-inline: clamp(30px, calc(var(--composer-height, 130px) * .24), 88px); }
+html[data-composer-shape="square"] .composer-shell { border-radius: 6px; }
+.workspace-surface:not(.has-conversation) { overflow-y: auto; overflow-x: hidden; }
+.composer-appearance-grid { display: grid; grid-template-columns: 1fr 1fr; align-items: end; gap: 18px; }
+.composer-appearance-footer { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-top: 13px; color: var(--muted); font-size: calc(10px * var(--ui-scale)); line-height: 1.5; }
+.composer-appearance-footer .quiet-button { flex: 0 0 auto; }
+.dialog-field select { width: 100%; padding: 10px 11px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink); background: var(--field); font-size: calc(11px * var(--ui-scale)); }
+.dialog-field select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (max-width: 760px) {
+  .composer-appearance-grid { grid-template-columns: 1fr; gap: 12px; }
+  .composer-appearance-footer { align-items: flex-start; flex-direction: column; }
+  html[data-composer-shape="pill"] .composer-shell { padding-inline: 26px; border-radius: 44px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .composer-shell, .composer-resize-grip span, .icon-button, .quiet-button, .idea-card, .thread-row { transition: none; }
+}

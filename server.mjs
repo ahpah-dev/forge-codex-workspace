@@ -9,7 +9,7 @@ import { promisify } from 'node:util';
 import { decryptProviderKey, encryptProviderKey, readEncryptedProviderKeys, writeEncryptedProviderKeys } from './provider-secrets.mjs';
 import { createAnthropicProvider } from './anthropic-provider.mjs';
 import { createFreeRouter, FREE_PROVIDER_ID, FREE_KEY_IDS, isCodexLimitError, exhaustedCodexLimit } from './free-router.mjs';
-import { bridgeResponses } from './responses-bridge.mjs';
+import { bridgeResponses, createChatProviderRouter, providerApiFormat } from './responses-bridge.mjs';
 
 const execFileAsync = promisify(execFile);
 const appRoot = path.dirname(fileURLToPath(import.meta.url));
@@ -61,6 +61,7 @@ async function loadSettings() {
       id: provider.id,
       name: String(provider.name || provider.id).slice(0, 48),
       baseUrl: String(provider.baseUrl || ''),
+      apiFormat: ['auto', 'chat', 'responses'].includes(provider.apiFormat) ? provider.apiFormat : 'auto',
       models: Array.isArray(provider.models) ? provider.models.filter((model) => model && /^[\w./:@+-]{1,180}$/.test(model.id || '')).slice(0, 100).map((model) => ({ id: model.id, name: String(model.name || model.id).slice(0, 180) })) : [],
     })) : [];
     return { ...defaultSettings, ...saved, askExternalApprovals: saved.askExternalApprovals !== false, freeRouting: { enabled: saved.freeRouting?.enabled === true, codexFallback: saved.freeRouting?.codexFallback === true }, recentWorkspaces: Array.isArray(saved.recentWorkspaces) ? saved.recentWorkspaces : [], providers };
@@ -124,6 +125,14 @@ function providerThreadConfig(provider) {
     web_search: 'disabled',
     model_providers: { [FREE_PROVIDER_ID]: {
       name: 'Free Auto Route', base_url: `http://${host}:${port}/internal/free-route`,
+      wire_api: 'responses', requires_openai_auth: false, supports_websockets: false,
+      http_headers: { Authorization: `Bearer ${bridgeToken}` }, request_max_retries: 0, stream_max_retries: 0,
+    } },
+  };
+  if (providerApiFormat(provider) === 'chat') return {
+    web_search: 'disabled',
+    model_providers: { [provider.id]: {
+      name: provider.name, base_url: `http://${host}:${port}/internal/providers/${provider.id}`,
       wire_api: 'responses', requires_openai_auth: false, supports_websockets: false,
       http_headers: { Authorization: `Bearer ${bridgeToken}` }, request_max_retries: 0, stream_max_retries: 0,
     } },
@@ -707,7 +716,7 @@ function requireSession(req) {
 
 async function bodyJson(req) {
   let text = '';
-  const maxLength = req.url?.startsWith('/api/messages') ? 14 * 1024 * 1024 : 1024 * 1024;
+  const maxLength = req.url?.startsWith('/internal/') ? 32 * 1024 * 1024 : req.url?.startsWith('/api/messages') ? 14 * 1024 * 1024 : 1024 * 1024;
   for await (const chunk of req) {
     text += chunk;
     if (text.length > maxLength) throw new Error(req.url?.startsWith('/api/messages') ? 'Request body is too large. Keep attached images under 9 MB total.' : 'Request body is too large.');
@@ -803,7 +812,11 @@ function resumeThread(threadId) {
   if (resumedThreads.has(threadId)) return Promise.resolve(null);
   const pending = threadResumeLoads.get(threadId);
   if (pending) return pending;
-  const load = getThreadHistory(threadId).then((history) => codex.rpc('thread/resume', { threadId, ...(history.thread.modelProvider === FREE_PROVIDER_ID ? { config: providerThreadConfig({ id: FREE_PROVIDER_ID }) } : {}) })).then((result) => {
+  const load = getThreadHistory(threadId).then((history) => {
+    const provider = history.thread.modelProvider === FREE_PROVIDER_ID ? { id: FREE_PROVIDER_ID }
+      : settings.providers.find((item) => item.id === history.thread.modelProvider);
+    return codex.rpc('thread/resume', { threadId, ...(provider ? { config: providerThreadConfig(provider) } : {}) });
+  }).then((result) => {
     resumedThreads.add(threadId);
     return result;
   }).finally(() => {
@@ -931,7 +944,8 @@ async function handleApi(req, res, url) {
         const encryptedKeys = await readEncryptedProviderKeys(providerKeysPath);
         if (apiKey) encryptedKeys[id] = await encryptProviderKey(apiKey);
         if (!encryptedKeys[id]) throw new Error('Enter an API key for this provider.');
-        const provider = { id, name, baseUrl, models };
+        const apiFormat = ['auto', 'chat', 'responses'].includes(input.apiFormat) ? input.apiFormat : 'auto';
+        const provider = { id, name, baseUrl, models, apiFormat };
         await writeEncryptedProviderKeys(providerKeysPath, encryptedKeys);
         settings.providers = existing
           ? settings.providers.map((item) => item.id === id ? provider : item)
@@ -1102,15 +1116,27 @@ const mimeTypes = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; char
 const httpServer = createServer(async (req, res) => {
   setSecurityHeaders(res);
   const url = new URL(req.url || '/', `http://${host}:${port}`);
-  if (url.pathname === '/internal/free-route/responses') {
+  const providerBridge = url.pathname.match(/^\/internal\/providers\/([a-z0-9_-]+)\/responses$/);
+  if (url.pathname === '/internal/free-route/responses' || providerBridge) {
     if (req.method !== 'POST') return json(res, 405, { error: { message: 'Method not allowed.' } });
     if (req.headers.authorization !== `Bearer ${bridgeToken}` || req.headers.origin) return json(res, 403, { error: { message: 'Invalid local inference session.' } });
     const controller = new AbortController();
     res.on('close', () => controller.abort());
     try {
       const input = await bodyJson(req);
-      await bridgeResponses({ input, res, router: freeRouter, signal: AbortSignal.any([controller.signal, AbortSignal.timeout(180000)]) });
+      let router = freeRouter;
+      if (providerBridge) {
+        const provider = settings.providers.find((item) => item.id === providerBridge[1]);
+        if (!provider || providerApiFormat(provider) !== 'chat') throw new Error('This Chat Completions provider is no longer configured.');
+        if (!provider.models.some((item) => item.id === input.model)) throw new Error('Choose a model saved for this provider.');
+        const keys = await readEncryptedProviderKeys(providerKeysPath);
+        const key = keys[provider.id] ? await decryptProviderKey(keys[provider.id]) : '';
+        if (!key) throw new Error(`Add your ${provider.name} API key in Settings.`);
+        router = createChatProviderRouter({ provider: { ...provider, baseUrl: normalizeProviderBaseUrl(provider.baseUrl) }, model: input.model, key });
+      }
+      await bridgeResponses({ input, res, router, signal: AbortSignal.any([controller.signal, AbortSignal.timeout(180000)]) });
     } catch (error) {
+      if (!controller.signal.aborted) console.error(JSON.stringify({ scope: 'provider-inference', provider: providerBridge?.[1] || FREE_PROVIDER_ID, errorType: error.name || 'Error' }));
       if (!res.headersSent) return json(res, 502, { error: { code: 'routing_unavailable', message: error.message } });
       res.end();
     }

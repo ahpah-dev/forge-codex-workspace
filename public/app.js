@@ -180,6 +180,7 @@ function resetProviderForm() {
   $('#provider-id').value = '';
   $('#provider-name').value = '';
   $('#provider-base-url').value = '';
+  $('#provider-api-format').value = 'auto';
   $('#provider-api-key').value = '';
   $('#provider-api-key').placeholder = 'Paste provider API key';
   $('#provider-key-hint').textContent = 'Stored encrypted on this Windows account';
@@ -318,6 +319,7 @@ function selectProviderPreset(preset) {
   if (!value) return;
   if (!$('#provider-id').value || preset === 'custom') $('#provider-name').value = value.name;
   $('#provider-base-url').value = value.baseUrl;
+  $('#provider-api-format').value = 'auto';
   $('#provider-api-key').placeholder = value.placeholder;
   showProviderError('');
 }
@@ -328,6 +330,7 @@ function editProvider(providerId) {
   $('#provider-id').value = provider.id;
   $('#provider-name').value = provider.name;
   $('#provider-base-url').value = provider.baseUrl;
+  $('#provider-api-format').value = provider.apiFormat || 'auto';
   $('#provider-api-key').value = '';
   $('#provider-api-key').placeholder = 'Leave blank to keep the saved key';
   $('#provider-key-hint').textContent = provider.authConfigured ? 'A saved key is already encrypted locally' : 'Stored encrypted on this Windows account';
@@ -374,6 +377,7 @@ async function saveProvider() {
       baseUrl: $('#provider-base-url').value,
       apiKey: $('#provider-api-key').value,
       models: $('#provider-models').value,
+      apiFormat: $('#provider-api-format').value,
     } });
     resetProviderForm();
     await refreshState({ quiet: true });
@@ -1070,10 +1074,12 @@ async function deleteThread(thread) {
 
 function renderSurface() {
   const active = Boolean(state.threadId || state.messages.length || state.isBusy);
+  const wasConversation = !$('#conversation-view').hidden;
   $('.workspace-surface').classList.toggle('has-conversation', active);
   const enteringConversation = active && $('#conversation-view').hidden;
   $('#welcome-view').hidden = active;
   $('#conversation-view').hidden = !active;
+  if (wasConversation !== active) resizeComposer();
   if (active) {
     $('#conversation-title').textContent = state.threadName || (state.messages.find((message) => message.role === 'user')?.text.slice(0, 72) || 'Image request');
     $('#conversation-subtitle').textContent = state.workspace?.path || '';
@@ -3126,8 +3132,24 @@ function updateComposerState() {
 
 function resizeComposer() {
   const textarea = $('#prompt-input');
-  textarea.style.height = 'auto';
-  textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`;
+  const manualHeight = window.ForgeTheme?.getComposerHeight() || 0;
+  if (manualHeight) textarea.style.height = `${Math.min(manualHeight, Math.max(64, innerHeight * .4))}px`;
+  else {
+    textarea.style.height = 'auto';
+    textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`;
+  }
+  const grip = $('#composer-resize-grip');
+  grip.setAttribute('aria-valuemin', '64');
+  grip.setAttribute('aria-valuemax', '360');
+  grip.setAttribute('aria-valuenow', String(Math.round(textarea.getBoundingClientRect().height)));
+}
+
+function positionWelcomeSuggestions() {
+  if ($('.workspace-surface').classList.contains('has-conversation')) return;
+  const dock = $('#composer-dock');
+  const bottom = dock.offsetTop + dock.offsetHeight;
+  $('.idea-divider').style.top = `${bottom + 12}px`;
+  $('.idea-grid').style.top = `${bottom + 38}px`;
 }
 
 function setContextTab(tab, { toggle = false } = {}) {
@@ -3285,6 +3307,40 @@ $('#image-input').addEventListener('change', (event) => {
 });
 $('#cancel-message-edit').addEventListener('click', cancelMessageEdit);
 $('#prompt-input').addEventListener('input', resizeComposer);
+window.addEventListener('forge:appearance', resizeComposer);
+window.addEventListener('resize', resizeComposer);
+const composerGrip = $('#composer-resize-grip');
+let composerDrag = null;
+composerGrip.addEventListener('pointerdown', (event) => {
+  if (event.button !== 0) return;
+  event.preventDefault();
+  composerDrag = { pointerId: event.pointerId, y: event.clientY, height: $('#prompt-input').getBoundingClientRect().height };
+  composerGrip.setPointerCapture(event.pointerId);
+  document.documentElement.classList.add('resizing-composer');
+});
+composerGrip.addEventListener('pointermove', (event) => {
+  if (!composerDrag || composerDrag.pointerId !== event.pointerId) return;
+  window.ForgeTheme.setComposerHeight(Math.round(composerDrag.height + composerDrag.y - event.clientY));
+});
+function endComposerResize() {
+  composerDrag = null;
+  document.documentElement.classList.remove('resizing-composer');
+}
+composerGrip.addEventListener('pointerup', endComposerResize);
+composerGrip.addEventListener('pointercancel', endComposerResize);
+composerGrip.addEventListener('lostpointercapture', endComposerResize);
+composerGrip.addEventListener('dblclick', () => window.ForgeTheme.setComposerHeight(0));
+composerGrip.addEventListener('keydown', (event) => {
+  if (event.key === 'Home' || event.key === 'Enter') {
+    event.preventDefault(); window.ForgeTheme.setComposerHeight(0);
+  } else if (['ArrowUp', 'ArrowDown'].includes(event.key)) {
+    event.preventDefault();
+    const height = window.ForgeTheme.getComposerHeight() || $('#prompt-input').getBoundingClientRect().height;
+    window.ForgeTheme.setComposerHeight(height + (event.key === 'ArrowUp' ? 12 : -12));
+  }
+});
+new ResizeObserver(positionWelcomeSuggestions).observe($('#composer-dock'));
+resizeComposer();
 $('#prompt-input').addEventListener('paste', (event) => {
   const images = [...(event.clipboardData?.items || [])]
     .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))

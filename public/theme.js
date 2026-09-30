@@ -30,7 +30,7 @@
     graphite: { name: 'Graphite', colors: { ...baseColors, page: '#1a1c1f', sidebar: '#16181b', paper: '#23262b', field: '#1d2025', hover: '#2d3239', user: '#2b3037', code: '#191c21', ink: '#edf0f3', muted: '#a0a8b3', line: '#353b44', accent: '#d39b7e', onAccent: '#201813', brand: '#a5b1ed', success: '#8bbf9a', danger: '#eb9189', astra: '#bd9ce8', sol: '#e2b26b', luna: '#a2b7ee', provider: '#c09de5', nvidia: '#a5c775' } },
     midnight: { name: 'Midnight', colors: { ...baseColors, page: '#141b29', sidebar: '#101623', paper: '#1c2535', field: '#172031', hover: '#29354b', user: '#27344b', code: '#111a29', ink: '#e7edf9', muted: '#9eacc5', line: '#33425b', accent: '#9aaee8', onAccent: '#14213d', brand: '#9aaee8', success: '#8cc8b1', danger: '#ed9d9d', astra: '#c6abea', sol: '#e9bd77', luna: '#a4c5ff', provider: '#c6abea', nvidia: '#a8c786' } },
   };
-  const defaults = { version: 1, preset: 'linen', colors: { ...baseColors }, fonts: { ui: 'system', chat: 'system', code: 'Consolas' }, customFonts: { ui: '', chat: '', code: '' }, uiScale: 100, chatSize: 15, codeSize: 12, lineHeight: 1.7, pattern: 'none' };
+  const defaults = { version: 1, preset: 'linen', colors: { ...baseColors }, fonts: { ui: 'system', chat: 'system', code: 'Consolas' }, customFonts: { ui: '', chat: '', code: '' }, uiScale: 100, chatSize: 15, codeSize: 12, lineHeight: 1.7, pattern: 'none', composerShape: 'rounded', composerHeight: 0 };
   const fontChoices = ['system', 'Segoe UI', 'Arial', 'Calibri', 'Verdana', 'Trebuchet MS', 'Georgia', 'Cambria', 'Times New Roman', 'Consolas', 'Cascadia Code', 'Courier New', 'custom', 'uploaded'];
   const fontSlots = [['ui', 'Interface font'], ['chat', 'Conversation font'], ['code', 'Code & terminal font']];
   const uploadedFonts = new Map();
@@ -51,6 +51,8 @@
       if (Number.isFinite(Number(input[key]))) result[key] = Math.max(min, Math.min(max, Number(input[key])));
     }
     if (['none', 'dots', 'grid'].includes(input.pattern)) result.pattern = input.pattern;
+    if (['rounded', 'pill', 'square'].includes(input.composerShape)) result.composerShape = input.composerShape;
+    if (Number.isFinite(Number(input.composerHeight)) && Number(input.composerHeight) > 0) result.composerHeight = Math.max(64, Math.min(360, Number(input.composerHeight)));
     return result;
   }
   function family(slot) {
@@ -79,7 +81,11 @@
     root.style.colorScheme = dark ? 'dark' : 'light';
     root.dataset.themeScheme = dark ? 'dark' : 'light';
     root.dataset.canvas = settings.pattern;
+    root.dataset.composerShape = settings.composerShape;
+    root.dataset.composerHeight = settings.composerHeight ? 'manual' : 'auto';
+    root.style.setProperty('--composer-height', `${settings.composerHeight || 130}px`);
     document.querySelector('meta[name="theme-color"]')?.setAttribute('content', settings.colors.page);
+    window.dispatchEvent(new Event('forge:appearance'));
   }
   function save() {
     apply();
@@ -166,6 +172,9 @@
       label.append(heading, range); rangeHost.append(label);
     }
     document.getElementById('theme-pattern').addEventListener('change', (event) => { settings.pattern = event.target.value; save(); });
+    document.getElementById('composer-shape').addEventListener('change', (event) => { settings.composerShape = event.target.value; save(); });
+    document.getElementById('composer-height').addEventListener('input', (event) => { settings.composerHeight = Number(event.target.value); save(); syncComposerControls(); });
+    document.getElementById('composer-height-auto').addEventListener('click', () => { settings.composerHeight = 0; save(); syncComposerControls(); });
     syncControls();
   }
   function syncControls() {
@@ -183,7 +192,16 @@
       document.querySelector(`[data-range-output="${input.dataset.rangeKey}"]`).value = `${input.value}${input.dataset.unit}`;
     });
     document.getElementById('theme-pattern').value = settings.pattern;
+    syncComposerControls();
     syncPresetLabel();
+  }
+  function syncComposerControls() {
+    const shape = document.getElementById('composer-shape');
+    if (!shape) return;
+    shape.value = settings.composerShape;
+    document.getElementById('composer-height').value = settings.composerHeight || 130;
+    document.getElementById('composer-height-value').value = settings.composerHeight ? `${Math.round(settings.composerHeight)}px` : 'Automatic';
+    document.getElementById('composer-height-auto').setAttribute('aria-pressed', String(!settings.composerHeight));
   }
   function fontDatabase() {
     return new Promise((resolve, reject) => {
@@ -214,6 +232,8 @@
   function close() { document.getElementById('settings-modal').hidden = true; lastFocus?.focus({ preventScroll: true }); }
   window.ForgeTheme = {
     open() { lastFocus = document.activeElement; syncControls(); document.getElementById('settings-modal').hidden = false; document.getElementById('appearance-close').focus(); },
+    getComposerHeight() { return settings.composerHeight; },
+    setComposerHeight(height) { settings.composerHeight = height === 0 ? 0 : Math.max(64, Math.min(360, height)); save(); syncComposerControls(); },
   };
   apply();
   document.addEventListener('DOMContentLoaded', () => {

@@ -24,7 +24,7 @@ File edits appear in expandable code cards with line numbers and additions/remov
 
 Download the latest Windows x64 installer from [GitHub Releases](https://github.com/davidegeric-cloud/forge-codex-workspace/releases/latest). Run the installer, then launch Forge from the Start menu or desktop shortcut. Sign in to Codex once in the Codex app or Codex CLI; Forge uses that saved local account automatically.
 
-To build the installer yourself, use Node.js 18 or newer on Windows x64, run `npm install`, then `npm run dist:win`. The installer is written to `release/Forge-Setup-1.0.14-x64.exe`. The desktop app bundles its Codex runtime and does not need a global Node.js install.
+To build the installer yourself, use Node.js 18 or newer on Windows x64, run `npm install`, then `npm run dist:win`. The installer is written to `release/Forge-Setup-1.0.15-x64.exe`. The desktop app bundles its Codex runtime and does not need a global Node.js install.
 
 ## Start from source
 
@@ -43,15 +43,17 @@ Enable **Automatic model routing** in Settings to select a GPT-6 model per task 
 
 **Anthropic / Claude Code:** Install the official [Claude Code CLI](https://code.claude.com/docs/en/setup), open **Manage providers**, and choose **Connect**. Forge uses the local Claude Code Agent SDK runtime and its saved Claude sign-in; sign in separately from ChatGPT. Claude model aliases select the latest Opus, Sonnet, or Haiku available to that CLI. Anthropic currently allows third-party Agent SDK usage to draw from Claude plan limits; the same plan usage limits apply. See [Anthropic's subscription and Agent SDK guidance](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan).
 
-**Google AI Pro:** Forge cannot sign in with a Google AI Pro subscription. Google's Gemini CLI subscription OAuth is restricted to Google's own client and must not be used by third-party apps. See [Google's Gemini CLI terms](https://github.com/google-gemini/gemini-cli/blob/main/docs/resources/tos-privacy.md). Google AI Studio or Vertex API access is separate from an AI Pro subscription; Forge's custom provider path requires a Responses API endpoint and an API key, so it only works with services that provide that interface.
+**Google AI Pro:** Forge cannot sign in with a Google AI Pro subscription. Google's Gemini CLI subscription OAuth is restricted to Google's own client and must not be used by third-party apps. See [Google's Gemini CLI terms](https://github.com/google-gemini/gemini-cli/blob/main/docs/resources/tos-privacy.md). Google AI Studio or Vertex API access is separate from an AI Pro subscription; Forge's custom provider path requires an API key and a compatible Responses or Chat Completions endpoint.
 
-Use **Manage providers** to add OpenRouter, NVIDIA NIM, or another service that supports the Responses API. Provider keys are encrypted with Windows DPAPI in the current user's local Forge data and are not written to `settings.json` or the Codex config file. Requests through external providers use that provider's billing, policies, and limits; they do not use the ChatGPT Codex allowance. ChatGPT remains signed in when other providers are used.
+Use **Manage providers** to add OpenRouter, NVIDIA NIM, or another service that supports Chat Completions or the Responses API. NVIDIA and OpenRouter use the local Chat Completions adapter automatically; other services can select their API format explicitly. For coding tasks, choose a model that supports tool calling. Provider keys are encrypted with Windows DPAPI in the current user's local Forge data and are not written to `settings.json` or the Codex config file. Requests through external providers use that provider's billing, policies, and limits; they do not use the ChatGPT Codex allowance. ChatGPT remains signed in when other providers are used.
 
 **OpenRouter Free Auto Route:** In Settings, enable the route and enter OpenRouter and NVIDIA NIM API keys. Forge discovers OpenRouter's current catalog and picks an eligible tool-capable model with zero input, output, and other listed prices, preferring stronger coding benchmark results. OpenRouter can still reject a nominally free model when provider capacity or account limits are exhausted; Forge then tries NVIDIA NIM models using your NVIDIA key and account quota. NVIDIA model availability, throughput, and any charges follow NVIDIA's current account terms. For Codex limit fallback, separately enable **Use free routing when Codex is rate limited**. Forge carries the visible conversation into a linked provider session only when a new response cannot start because Codex reports a rate limit. This does not increase Codex limits or make paid external services free.
 
 **Plan mode:** Choose **Plan** beside the composer mode selector to ask for a read-only investigation and implementation plan. Switch back to **Code** to make changes.
 
 ## Workspace and appearance
+
+Drag the grip at the top of the chatbox to adjust its text area height, or focus the grip and use the arrow keys. Double-click it (or press Home/Enter) to restore automatic height. **Settings → Chatbox** saves your preferred height and Rounded, Pill, or Square shape on this device.
 
 Forge opens the Windows folder picker in the desktop app. The browser version accepts a local folder path. Official Codex models run with full file-system and network access and do not pause for approval; use Ask or Plan mode for read-only work. External models ask before extra access by default. Change this in Settings under **External model permissions**.
 

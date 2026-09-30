@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.15
+
+- Fixed NVIDIA NIM and other Chat Completions providers with a local API adapter, automatic NVIDIA/OpenRouter detection, and provider API format selection. Existing provider sessions reconnect with the current configuration.
+- Added a draggable chatbox height grip and saved Rounded, Pill, and Square shapes in Appearance settings, with subtle interface refinements.
+
 ## 1.0.14
 
 - Added live code previews for provider file-edit events, with line numbers, additions/removals, and optional automatic scrolling. Claude Write/Edit inputs appear as they stream; Codex patches appear as the runtime exposes them.
