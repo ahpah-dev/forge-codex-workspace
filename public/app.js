@@ -22,6 +22,7 @@ const state = {
   deletingThreads: new Set(),
   historyVisibleCount: 60,
   messages: [],
+  messageEditTarget: null,
   activeTurnId: null,
   activityStatus: 'Starting task',
   isBusy: false,
@@ -1046,6 +1047,74 @@ function renderSurface() {
   }
   renderThreads();
   updateComposerState();
+  renderMessageEditBanner();
+}
+
+function renderMessageEditBanner() {
+  const banner = $('#message-edit-banner');
+  if (!banner) return;
+  banner.hidden = !state.messageEditTarget;
+  if (state.messageEditTarget) banner.querySelector('span').textContent = state.messageEditTarget.turnId
+    ? 'Editing a previous message · sending creates a branch'
+    : 'Editing a message that did not start · sending retries it';
+}
+
+function beginMessageEdit(message) {
+  if (state.isBusy || state.threadLoading) return;
+  state.messageEditTarget = { id: message.id, turnId: message.turnId || null, text: message.text };
+  $('#prompt-input').value = message.text;
+  resizeComposer();
+  renderMessageEditBanner();
+  $('#prompt-input').focus();
+  showToast(message.turnId ? 'Edit the prompt, then send to rerun it in a new branch.' : 'Edit the prompt, then send to retry it.');
+}
+
+function cancelMessageEdit() {
+  state.messageEditTarget = null;
+  $('#prompt-input').value = '';
+  resizeComposer();
+  renderMessageEditBanner();
+}
+
+async function openBranchBeforeMessage(message) {
+  const sourceThreadId = message.threadId || state.threadId;
+  if (!sourceThreadId || !message.turnId) throw new Error('This message cannot be used as a branch point.');
+  const result = await api('/api/threads/fork-before-message', { method: 'POST', body: { threadId: sourceThreadId, turnId: message.turnId } });
+  const history = await api('/api/threads/open', { method: 'POST', body: { threadId: result.threadId } });
+  applyThreadResult(history);
+  void refreshState({ quiet: true });
+}
+
+async function retryUserMessage(message) {
+  if (state.isBusy || state.threadLoading) return;
+  if (!message.turnId) {
+    await sendMessage(message.text, { replaceMessageId: message.id });
+    return;
+  }
+  try {
+    state.threadLoading = true;
+    renderSurface();
+    await openBranchBeforeMessage(message);
+    await sendMessage(message.text);
+  } catch (error) {
+    state.threadLoading = false;
+    renderSurface();
+    showToast(error.message || 'Could not retry this message.', 'error');
+  }
+}
+
+async function revertToUserMessage(message) {
+  if (state.isBusy || state.threadLoading) return;
+  try {
+    state.threadLoading = true;
+    renderSurface();
+    await openBranchBeforeMessage(message);
+    showToast('Opened a branch before that message. Existing workspace file changes were left as they are.');
+  } catch (error) {
+    state.threadLoading = false;
+    renderSurface();
+    showToast(error.message || 'Could not branch from this message.', 'error');
+  }
 }
 
 function renderGitOrWorkspace() {
@@ -1098,6 +1167,7 @@ async function openWorkspace(pathValue) {
     state.threadProviderId = null;
     state.threadName = '';
     state.messages = [];
+    state.messageEditTarget = null;
     state.activeTurnId = null;
     state.isBusy = false;
     state.approvals = [];
@@ -1136,6 +1206,8 @@ function newTask() {
   state.threadProviderId = null;
   state.threadName = '';
   state.messages = [];
+  state.messageEditTarget = null;
+  renderMessageEditBanner();
   state.activeTurnId = null;
   state.approvals = [];
   state.diff = '';
@@ -1865,7 +1937,39 @@ function renderMessage(message) {
       const access = document.createElement('small');
       access.textContent = delegation.readOnly ? 'Read only' : 'Workspace permissions';
       user.append(kicker, heading, task, access);
-    } else user.textContent = message.text;
+    } else {
+      const body = document.createElement('div');
+      body.className = 'user-message-content';
+      body.textContent = message.text;
+      user.append(body);
+    }
+    if (!state.threadLoading) {
+      const actions = document.createElement('div');
+      actions.className = 'user-message-actions';
+      const edit = document.createElement('button');
+      edit.type = 'button';
+      edit.textContent = 'Edit';
+      edit.title = message.turnId ? 'Edit and rerun from this message in a new branch' : 'Edit this message';
+      edit.disabled = state.isBusy || state.threadLoading;
+      edit.addEventListener('click', () => beginMessageEdit(message));
+      const retry = document.createElement('button');
+      retry.type = 'button';
+      retry.textContent = 'Retry';
+      retry.title = message.turnId ? 'Retry from this message in a new branch' : 'Retry this message';
+      retry.disabled = state.isBusy || state.threadLoading;
+      retry.addEventListener('click', () => { void retryUserMessage(message); });
+      actions.append(edit, retry);
+      if (message.turnId) {
+        const revert = document.createElement('button');
+        revert.type = 'button';
+        revert.textContent = 'Revert to here';
+        revert.title = 'Create a branch before this message. Workspace files are not reverted.';
+        revert.disabled = state.isBusy || state.threadLoading;
+        revert.addEventListener('click', () => { void revertToUserMessage(message); });
+        actions.append(revert);
+      }
+      user.append(actions);
+    }
     return user;
   }
   if (message.role === 'activity') return renderActivity(message);
@@ -2535,7 +2639,7 @@ function applyThreadResult(result, { keepScroll = false } = {}) {
   }
   state.threadName = result.thread.name || 'Untitled session';
   state.workspace = nextWorkspace;
-  state.messages = (result.messages || []).filter((message) => message.role !== 'agent-event');
+  state.messages = (result.messages || []).filter((message) => message.role !== 'agent-event').map((message) => ({ ...message, threadId: result.thread.id }));
   state.historyVisibleCount = 60;
   for (const event of (result.messages || []).filter((message) => message.role === 'agent-event')) upsertAgentItem(event.item, event.turnId);
   state.approvals = [];
@@ -2576,6 +2680,7 @@ async function openThread(threadId) {
   state.threadName = state.threads?.find((thread) => thread.id === threadId)?.name || 'Opening session';
   state.threadLoading = true;
   state.messages = [];
+  state.messageEditTarget = null;
   state.historyVisibleCount = 60;
   state.approvals = [];
   state.activeTurnId = null;
@@ -2619,7 +2724,7 @@ async function openThread(threadId) {
   }
 }
 
-async function sendMessage(textOverride, { readOnlyOverride, routingText } = {}) {
+async function sendMessage(textOverride, { readOnlyOverride, routingText, replaceMessageId } = {}) {
   if (state.isBusy) return;
   if (state.threadLoading) { showToast('Wait for the selected session to finish opening.'); return; }
   if (!state.workspace) { openWorkspaceDialog(); return; }
@@ -2649,10 +2754,37 @@ async function sendMessage(textOverride, { readOnlyOverride, routingText } = {})
   if (!usesAnthropic && !selectedModel.providerId && !state.account?.connected) { showToast('Connect your ChatGPT account before sending a Codex task.'); setModal('login-modal', true); return; }
   if (selectedModel.providerId === 'forge-free' && (!state.freeRouting.openrouterConfigured || !state.freeRouting.nvidiaConfigured)) { showToast('Save both routing API keys in Settings first.'); window.ForgeTheme.open(); return; }
   if (usesAnthropic && !state.anthropic?.available) { showToast('Install Claude Code, then reopen Model providers to connect your Claude subscription.'); setModal('providers-modal', true); return; }
+  const editTarget = state.messageEditTarget;
+  if (editTarget?.turnId) {
+    try {
+      state.threadLoading = true;
+      renderSurface();
+      await openBranchBeforeMessage(editTarget);
+      state.messageEditTarget = null;
+      renderMessageEditBanner();
+    } catch (error) {
+      state.threadLoading = false;
+      renderSurface();
+      showToast(error.message || 'Could not branch this conversation for editing.', 'error');
+      return false;
+    }
+  }
+  const replacedMessageId = replaceMessageId || (editTarget && !editTarget.turnId ? editTarget.id : null);
+  if (replacedMessageId) {
+    let removedError = false;
+    state.messages = state.messages.filter((message) => {
+      if (message.id === replacedMessageId) return false;
+      if (message.role === 'error' && !removedError) { removedError = true; return false; }
+      return true;
+    });
+    state.messageEditTarget = null;
+    renderMessageEditBanner();
+  }
   state.pendingSend = true;
   state.isBusy = true;
   state.activityStatus = automaticRoute ? `Auto · ${selectedModel.name} · ${automaticRoute.reason}` : 'Starting task';
-  state.messages.push({ id: `user-${Date.now()}`, role: 'user', text });
+  const userMessage = { id: `user-${Date.now()}`, role: 'user', text, threadId: state.threadId };
+  state.messages.push(userMessage);
   state.messages.push({ id: `pending-${Date.now()}`, role: 'assistant', turnId: null, text: '', pending: true });
   textarea.value = '';
   resizeComposer();
@@ -2671,6 +2803,7 @@ async function sendMessage(textOverride, { readOnlyOverride, routingText } = {})
       planningMode: $('#access-select').value === 'plan',
     } });
     state.threadId = result.threadId;
+    userMessage.threadId = result.threadId;
     state.threadProviderId = result.providerId || 'openai';
     if (result.providerId === 'forge-free') {
       selectFreeRouteModel();
@@ -2868,6 +3001,7 @@ $$('.idea-card').forEach((button) => button.addEventListener('click', () => {
   else sendMessage(button.dataset.prompt);
 }));
 $('#send-button').addEventListener('click', () => sendMessage());
+$('#cancel-message-edit').addEventListener('click', cancelMessageEdit);
 $('#prompt-input').addEventListener('input', resizeComposer);
 $('#prompt-input').addEventListener('keydown', (event) => {
   if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); sendMessage(); }

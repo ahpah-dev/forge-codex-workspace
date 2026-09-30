@@ -3,7 +3,7 @@ import { execFile } from 'node:child_process';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import { deleteSession, query } from '@anthropic-ai/claude-agent-sdk';
+import { deleteSession, forkSession, getSessionMessages, query } from '@anthropic-ai/claude-agent-sdk';
 
 const execFileAsync = promisify(execFile);
 const THREAD_PREFIX = 'anthropic:';
@@ -179,6 +179,57 @@ export function createAnthropicProvider({ dataRoot, publish, executable = 'claud
     };
   }
 
+  async function forkBeforeMessage(threadId, turnId) {
+    await loadSessions();
+    const session = getSession(threadId);
+    if (!session) throw new Error('That Claude session could not be found in this workspace.');
+    if (activeTurns.has(threadId)) throw new Error('Stop the active Claude task before branching this conversation.');
+    const index = (session.messages || []).findIndex((message) => message.role === 'user' && message.turnId === turnId);
+    if (index < 0) throw new Error('That user message is no longer in this conversation.');
+    const target = session.messages[index];
+    const branchMessages = session.messages.slice(0, index);
+    let anthropicSessionId = randomUUID();
+    let hasTranscript = false;
+    if (session.hasTranscript) {
+      const transcript = await getSessionMessages(session.anthropicSessionId, { dir: session.cwd });
+      let targetSdkMessageId = target.sdkMessageId;
+      if (!targetSdkMessageId) {
+        const localOccurrence = session.messages.slice(0, index + 1).filter((message) => message.role === 'user' && message.text === target.text).length - 1;
+        const matchingUsers = transcript.filter((message) => {
+          if (message.type !== 'user') return false;
+          const content = message.message?.content;
+          const text = typeof content === 'string' ? content : Array.isArray(content) ? content.filter((part) => part.type === 'text').map((part) => part.text || '').join('\n') : '';
+          return text === target.text;
+        });
+        targetSdkMessageId = matchingUsers[localOccurrence]?.uuid;
+      }
+      const targetIndex = transcript.findIndex((message) => message.uuid === targetSdkMessageId);
+      if (targetIndex < 0) throw new Error('Claude could not find the saved transcript point for this message.');
+      const previous = transcript[targetIndex - 1];
+      if (previous) {
+        const fork = await forkSession(session.anthropicSessionId, { dir: session.cwd, upToMessageId: previous.uuid, title: `${session.name || 'Claude task'} (branch)` });
+        anthropicSessionId = fork.sessionId;
+        hasTranscript = true;
+      }
+    }
+    const now = Date.now();
+    const branch = {
+      ...session,
+      id: THREAD_PREFIX + randomUUID(),
+      name: `${session.name || 'Claude task'} (branch)`.slice(0, 68),
+      anthropicSessionId,
+      hasTranscript,
+      messages: branchMessages.map((message) => ({ ...message })),
+      tools: {},
+      status: 'idle',
+      createdAt: now,
+      updatedAt: now,
+    };
+    sessions.unshift(branch);
+    await saveSessions();
+    return branch.id;
+  }
+
   async function deleteThread(threadId) {
     await loadSessions();
     const index = sessions.findIndex((item) => item.id === threadId);
@@ -288,6 +339,13 @@ export function createAnthropicProvider({ dataRoot, publish, executable = 'claud
           continue;
         }
         if (message.type === 'assistant') {
+          if (message.user_message_uuid) {
+            const userMessage = [...session.messages].reverse().find((item) => item.role === 'user' && item.turnId === turnId);
+            if (userMessage && !userMessage.sdkMessageId) {
+              userMessage.sdkMessageId = message.user_message_uuid;
+              scheduleSave(session);
+            }
+          }
           const blocks = message.message?.content || [];
           for (const block of blocks) {
             if (block.type === 'tool_use' && block.id && block.name) {
@@ -449,5 +507,5 @@ export function createAnthropicProvider({ dataRoot, publish, executable = 'claud
     }
   }
 
-  return { getStatus, listThreads, readThreadHistory, deleteThread, startTurn, interrupt, resolveApproval, owns };
+  return { getStatus, listThreads, readThreadHistory, forkBeforeMessage, deleteThread, startTurn, interrupt, resolveApproval, owns };
 }

@@ -917,6 +917,34 @@ async function handleApi(req, res, url) {
         const result = await openThread(String(input.threadId || ''));
         return json(res, 200, result);
       }
+      if (route === '/api/threads/fork-before-message') {
+        if (!activeWorkspace) throw new Error('Open a workspace before branching a conversation.');
+        const threadId = String(input.threadId || '').trim();
+        const beforeTurnId = String(input.turnId || '').trim();
+        if (!threadId || !beforeTurnId || threadId.length > 200 || beforeTurnId.length > 200) throw new Error('Choose a valid message to branch from.');
+        if (anthropic.owns(threadId)) {
+          const forkedThreadId = await anthropic.forkBeforeMessage(threadId, beforeTurnId);
+          return json(res, 200, { threadId: forkedThreadId, sourceThreadId: threadId });
+        }
+        const history = await readThreadHistory(threadId);
+        if (history.thread.cwd && path.resolve(history.thread.cwd).toLowerCase() !== path.resolve(activeWorkspace).toLowerCase()) throw new Error('Open the workspace where this conversation started before branching it.');
+        if (!history.messages.some((message) => message.role === 'user' && message.turnId === beforeTurnId)) throw new Error('That user message is no longer in this conversation. Refresh the session and try again.');
+        const providerId = history.thread.modelProvider || 'openai';
+        const provider = providerId === FREE_PROVIDER_ID ? { id: FREE_PROVIDER_ID } : settings.providers.find((item) => item.id === providerId);
+        const result = await codex.rpc('thread/fork', {
+          threadId,
+          beforeTurnId,
+          cwd: activeWorkspace,
+          modelProvider: providerId,
+          ...(provider ? { config: providerThreadConfig(provider) } : {}),
+        });
+        const forkedThreadId = result.thread?.id;
+        if (!forkedThreadId) throw new Error('Codex did not return the new conversation branch.');
+        invalidateThreadHistory(forkedThreadId);
+        threadHistoryLoads.delete(forkedThreadId);
+        resumedThreads.delete(forkedThreadId);
+        return json(res, 200, { threadId: forkedThreadId, sourceThreadId: threadId });
+      }
       if (route === '/api/threads/delete') {
         if (!activeWorkspace) throw new Error('Open a workspace before deleting a session.');
         const threadId = String(input.threadId || '').trim();
