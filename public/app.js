@@ -22,6 +22,7 @@ const state = {
   deletingThreads: new Set(),
   historyVisibleCount: 60,
   messages: [],
+  codePreviewViews: new Map(),
   pendingImages: [],
   messageEditTarget: null,
   activeTurnId: null,
@@ -1982,7 +1983,7 @@ function renderActivity(message) {
       const label = document.createElement('span');
       label.className = 'activity-file-name';
       label.textContent = change.path || change.filePath || change.displayPath || 'Updated file';
-      const stats = getFileLineStats(label.textContent);
+      const stats = typeof change.diff === 'string' ? filePatchStats(change.diff) : getFileLineStats(label.textContent);
       row.append(prefix, label);
       if (stats) {
         const lineStats = document.createElement('span');
@@ -1990,11 +1991,106 @@ function renderActivity(message) {
         lineStats.innerHTML = `<span class="change-added">+${stats.added}</span><span class="change-removed">-${stats.removed}</span>`;
         row.append(lineStats);
       }
-      list.append(row);
+      const file = document.createElement('section');
+      file.className = 'activity-file-edit';
+      file.append(row);
+      if (change.diff) file.append(renderCodePreview(change, message, pending));
+      list.append(file);
     }
     details.append(list);
   }
   return details;
+}
+
+function filePatchStats(diff) {
+  const lines = String(diff || '').split('\n');
+  return {
+    added: lines.filter((line) => line.startsWith('+') && !line.startsWith('+++ ')).length,
+    removed: lines.filter((line) => line.startsWith('-') && !line.startsWith('--- ')).length,
+  };
+}
+
+function renderCodePreview(change, message, pending) {
+  const preview = document.createElement('div');
+  preview.className = 'live-code-preview';
+  const toolbar = document.createElement('div');
+  toolbar.className = 'live-code-toolbar';
+  const label = document.createElement('span');
+  label.className = 'live-code-label';
+  label.textContent = pending ? 'Live · proposed edit' : /fail|declin|interrupt|stop/i.test(message.status || '') ? 'Proposed edit · not applied' : 'Edit patch';
+  const key = `${state.threadId}:${message.id}:${change.path || change.filePath || ''}`;
+  let view = state.codePreviewViews.get(key);
+  if (!view) {
+    view = { follow: true, top: 0, left: 0 };
+    state.codePreviewViews.set(key, view);
+    if (state.codePreviewViews.size > 250) state.codePreviewViews.delete(state.codePreviewViews.keys().next().value);
+  }
+  const follow = document.createElement('button');
+  follow.type = 'button';
+  follow.className = 'live-code-follow';
+  follow.textContent = view.follow ? 'Following' : 'Follow code';
+  follow.setAttribute('aria-pressed', String(view.follow));
+  follow.title = 'Keep the newest code visible';
+  follow.hidden = !pending;
+  const code = document.createElement('pre');
+  code.className = 'live-code-content';
+  code.tabIndex = 0;
+  code.setAttribute('aria-label', `Code changes for ${change.path || 'file'}`);
+  let oldLine = 1;
+  let newLine = 1;
+  const lines = String(change.diff).split('\n');
+  const firstLine = Math.max(0, lines.length - 600);
+  const markup = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    const hunk = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+    let kind = 'context', before = '', after = '';
+    if (hunk) { oldLine = Number(hunk[1]); newLine = Number(hunk[2]); kind = 'hunk'; }
+    else if (/^(diff --git|index |--- |\+\+\+ |\\ No newline)/.test(line)) kind = 'meta';
+    else if (line.startsWith('+')) { kind = 'add'; after = newLine++; }
+    else if (line.startsWith('-')) { kind = 'remove'; before = oldLine++; }
+    else { before = oldLine++; after = newLine++; }
+    if (index >= firstLine) markup.push(`<span class="live-code-line ${kind}"><span class="live-code-number">${before}</span><span class="live-code-number">${after}</span><code>${escapeHTML(line) || ' '}</code></span>`);
+  }
+  code.innerHTML = markup.join('');
+  toolbar.append(label, follow);
+  preview.append(toolbar, code);
+  if (firstLine) {
+    const note = document.createElement('div');
+    note.className = 'live-code-note';
+    note.textContent = `Showing the latest 600 of ${lines.length} patch lines.`;
+    preview.append(note);
+  }
+  follow.addEventListener('click', () => {
+    view.follow = !view.follow;
+    follow.textContent = view.follow ? 'Following' : 'Follow code';
+    follow.setAttribute('aria-pressed', String(view.follow));
+    if (view.follow) code.scrollTop = code.scrollHeight;
+  });
+  code.addEventListener('scroll', () => {
+    view.top = code.scrollTop;
+    view.left = code.scrollLeft;
+    if (code.scrollTop + code.clientHeight < code.scrollHeight - 24 && view.follow) {
+      view.follow = false;
+      follow.textContent = 'Follow code';
+      follow.setAttribute('aria-pressed', 'false');
+    }
+  });
+  requestAnimationFrame(() => {
+    if (!code.isConnected) return;
+    code.scrollTop = pending && view.follow ? code.scrollHeight : view.top;
+    code.scrollLeft = view.left;
+  });
+  return preview;
+}
+
+let liveCodeRenderTimer;
+function scheduleLiveCodeRender() {
+  if (liveCodeRenderTimer) return;
+  liveCodeRenderTimer = setTimeout(() => {
+    liveCodeRenderTimer = null;
+    renderSurface();
+  }, 80);
 }
 
 function getFileLineStats(filePath) {
@@ -2007,7 +2103,7 @@ function getFileLineStats(filePath) {
 
 function formatActivityFileSummary(changes) {
   const paths = changes.map((change) => change.path || change.filePath || change.displayPath).filter(Boolean);
-  const stats = paths.map(getFileLineStats).filter(Boolean);
+  const stats = changes.map((change) => typeof change.diff === 'string' ? filePatchStats(change.diff) : getFileLineStats(change.path || change.filePath || change.displayPath)).filter(Boolean);
   const added = stats.reduce((sum, entry) => sum + formatLineCount(entry.added), 0);
   const removed = stats.reduce((sum, entry) => sum + formatLineCount(entry.removed), 0);
   const uniqueFiles = new Set(paths).size;
@@ -2295,7 +2391,7 @@ function upsertActivity(item, turnId) {
     activityType,
     command: item.command || '',
     output: item.aggregatedOutput || '',
-    changes: item.changes || [],
+    changes: item.changes?.length ? item.changes : existing?.changes || [],
     query: item.query || '',
     toolName: item.toolName || '',
     input: item.input || null,
@@ -2533,7 +2629,15 @@ function handleCodexEvent(event) {
     addOrUpdateAssistant(params, params.delta || '');
     return;
   }
-  if (method === 'commandExecution/outputDelta' || method === 'commandExecution/terminalInteraction') {
+  if (method === 'item/fileChange/patchUpdated') {
+    if (state.threadId && params.threadId !== state.threadId) return;
+    const existing = state.messages.find((message) => message.role === 'activity' && message.id === params.itemId);
+    upsertActivity({ id: params.itemId, type: 'fileChange', changes: params.changes || [], status: existing?.status || 'inProgress' }, params.turnId);
+    setActivityStatus(activityStatusForItem({ type: 'fileChange', changes: params.changes || [] }));
+    scheduleLiveCodeRender();
+    return;
+  }
+  if (method === 'item/commandExecution/outputDelta' || method === 'commandExecution/outputDelta' || method === 'commandExecution/terminalInteraction') {
     if (state.threadId && params.threadId !== state.threadId) return;
     let activity = state.messages.find((message) => message.role === 'activity' && message.id === params.itemId);
     const command = params.command || activity?.command || '';

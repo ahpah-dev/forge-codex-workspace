@@ -2,6 +2,7 @@
 
 ## 1.0.14
 
+- Added live code previews for provider file-edit events, with line numbers, additions/removals, and optional automatic scrolling. Claude Write/Edit inputs appear as they stream; Codex patches appear as the runtime exposes them.
 - Matched the desktop, Start menu, pinned taskbar, and running-window icons to the same transparent Forge logo; installation refreshes existing shortcuts.
 - Added image attachments to the composer, including paste-from-clipboard, previews, and removal controls.
 - Send up to four PNG, JPEG, WebP, or GIF images to Codex, Claude, and compatible providers (up to 9 MB per message).

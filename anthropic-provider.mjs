@@ -9,6 +9,61 @@ const execFileAsync = promisify(execFile);
 const THREAD_PREFIX = 'anthropic:';
 const MODELS = new Set(['opus', 'sonnet', 'haiku']);
 
+// Decode top-level string fields even while the SDK is still streaming JSON.
+// Only complete escape sequences are displayed; input is never executed.
+function partialEditInput(json) {
+  const fields = {};
+  let depth = 0;
+  function stringAt(start) {
+    let value = '';
+    for (let index = start + 1; index < json.length; index += 1) {
+      const character = json[index];
+      if (character === '"') return { value, end: index + 1, complete: true };
+      if (character !== '\\') { value += character; continue; }
+      index += 1;
+      if (index >= json.length) break;
+      const escape = json[index];
+      if (escape === 'u') {
+        const digits = json.slice(index + 1, index + 5);
+        if (!/^[a-f\d]{4}$/i.test(digits)) break;
+        value += String.fromCharCode(parseInt(digits, 16));
+        index += 4;
+      } else {
+        const escapes = { n: '\n', r: '\r', t: '\t', b: '\b', f: '\f', '"': '"', '\\': '\\', '/': '/' };
+        if (!(escape in escapes)) break;
+        value += escapes[escape];
+      }
+    }
+    return { value, end: json.length, complete: false };
+  }
+  for (let index = 0; index < json.length; index += 1) {
+    if (json[index] === '{' || json[index] === '[') depth += 1;
+    else if (json[index] === '}' || json[index] === ']') depth -= 1;
+    else if (json[index] === '"') {
+      const key = stringAt(index);
+      index = key.end - 1;
+      if (depth !== 1 || !key.complete) continue;
+      let next = key.end;
+      while (/\s/.test(json[next] || '') && next < json.length) next += 1;
+      if (json[next] !== ':') continue;
+      next += 1;
+      while (/\s/.test(json[next] || '') && next < json.length) next += 1;
+      if (json[next] !== '"') continue;
+      const field = stringAt(next);
+      if (['file_path', 'content', 'old_string', 'new_string'].includes(key.value)) fields[key.value] = field.value;
+      index = field.end - 1;
+    }
+  }
+  return fields;
+}
+
+function editPatch(toolName, input) {
+  const lines = (value, prefix) => value ? String(value).split('\n').map((line) => prefix + line).join('\n') : '';
+  if (toolName === 'Write') return lines(input.content, '+');
+  if (toolName === 'Edit') return [lines(input.old_string, '-'), lines(input.new_string, '+')].filter(Boolean).join('\n');
+  return '';
+}
+
 export function createAnthropicProvider({ dataRoot, publish, executable = 'claude' }) {
   const storePath = path.join(dataRoot, 'anthropic-sessions.json');
   const activeTurns = new Map();
@@ -97,7 +152,7 @@ export function createAnthropicProvider({ dataRoot, publish, executable = 'claud
     const filePath = String(input.file_path || input.path || input.filePath || '');
     if (toolName === 'Bash') return { id, type: 'commandExecution', command: String(input.command || ''), status };
     if (['Edit', 'Write', 'NotebookEdit'].includes(toolName)) {
-      return { id, type: 'fileChange', changes: [{ path: filePath || 'Workspace file', kind: toolName }], status };
+      return { id, type: 'fileChange', changes: [{ path: filePath || 'Workspace file', kind: toolName, diff: editPatch(toolName, input) }], status };
     }
     if (toolName === 'WebSearch') return { id, type: 'webSearch', query: String(input.query || ''), status };
     if (toolName === 'Agent' || toolName === 'Task') {
@@ -118,9 +173,18 @@ export function createAnthropicProvider({ dataRoot, publish, executable = 'claud
     const tool = session.tools?.[toolUseId];
     if (!tool) return;
     Object.assign(tool, changes);
+    rememberFileEdit(session, turnId, tool);
     scheduleSave(session);
-    const method = changes.status === 'completed' || changes.status === 'failed' ? 'item/completed' : 'item/started';
+    const method = /^(completed|failed|interrupted|declined)$/.test(changes.status || '') ? 'item/completed' : 'item/started';
     send(method, { threadId: session.id, turnId, item: tool });
+  }
+
+  function rememberFileEdit(session, turnId, tool) {
+    if (tool.type !== 'fileChange') return;
+    const value = { id: tool.id, turnId, role: 'activity', activityType: 'files', changes: tool.changes, status: tool.status };
+    const existing = session.messages.find((message) => message.role === 'activity' && message.id === tool.id);
+    if (existing) Object.assign(existing, value);
+    else session.messages.push(value);
   }
 
   async function getStatus(force = false) {
@@ -302,6 +366,13 @@ export function createAnthropicProvider({ dataRoot, publish, executable = 'claud
 
     const controller = activeTurns.get(session.id)?.controller || new AbortController();
     const tools = session.tools || (session.tools = {});
+    const streamedEdits = new Map();
+    const currentFileTools = new Set();
+    function finishPendingEdits(status) {
+      for (const id of currentFileTools) {
+        if (tools[id]?.status === 'inProgress') updateToolActivity(session, turnId, id, { status });
+      }
+    }
     let finalResult = null;
     try {
       const options = {
@@ -346,6 +417,39 @@ export function createAnthropicProvider({ dataRoot, publish, executable = 'claud
         }
         if (message.type === 'stream_event') {
           const event = message.event || {};
+          if (!message.parent_tool_use_id) {
+            if (event.type === 'message_start') streamedEdits.clear();
+            if (event.type === 'content_block_start' && event.content_block?.type === 'tool_use'
+              && ['Write', 'Edit'].includes(event.content_block.name)) {
+              const block = event.content_block;
+              streamedEdits.set(event.index, { id: block.id, name: block.name, json: '', updatedAt: 0 });
+              const item = toolItem(block.name, block.input || {}, block.id);
+              tools[block.id] = item;
+              currentFileTools.add(block.id);
+              rememberFileEdit(session, turnId, item);
+              send('item/started', { threadId: session.id, turnId, item });
+            }
+            const edit = streamedEdits.get(event.index);
+            if (edit && event.type === 'content_block_delta' && event.delta?.type === 'input_json_delta') {
+              edit.json += event.delta.partial_json || '';
+              // Coalesce small token chunks, keeping the final block authoritative.
+              if (Date.now() - edit.updatedAt >= 80) {
+                edit.updatedAt = Date.now();
+                const item = toolItem(edit.name, partialEditInput(edit.json), edit.id);
+                tools[edit.id] = item;
+                rememberFileEdit(session, turnId, item);
+                send('item/fileChange/patchUpdated', { threadId: session.id, turnId, itemId: edit.id, changes: item.changes });
+              }
+            }
+            if (edit && event.type === 'content_block_stop') {
+              const item = toolItem(edit.name, partialEditInput(edit.json), edit.id);
+              tools[edit.id] = item;
+              rememberFileEdit(session, turnId, item);
+              scheduleSave(session);
+              send('item/fileChange/patchUpdated', { threadId: session.id, turnId, itemId: edit.id, changes: item.changes });
+              streamedEdits.delete(event.index);
+            }
+          }
           if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta' && event.delta.text) {
             assistant.text += event.delta.text;
             assistant.pending = true;
@@ -367,6 +471,10 @@ export function createAnthropicProvider({ dataRoot, publish, executable = 'claud
             if (block.type === 'tool_use' && block.id && block.name) {
               const item = toolItem(block.name, block.input || {}, block.id);
               tools[block.id] = item;
+              if (item.type === 'fileChange') {
+                currentFileTools.add(block.id);
+                rememberFileEdit(session, turnId, item);
+              }
               scheduleSave(session);
               if (item.type === 'anthropicAgentActivity') {
                 send('item/started', { threadId: session.id, turnId, item });
@@ -435,6 +543,7 @@ export function createAnthropicProvider({ dataRoot, publish, executable = 'claud
       }
 
       const failed = Boolean(finalResult?.is_error);
+      finishPendingEdits(failed ? 'failed' : 'interrupted');
       if (!assistant.text && finalResult?.result) {
         assistant.text = String(finalResult.result);
         send('item/agentMessage/delta', { threadId: session.id, turnId, itemId: assistantId, delta: assistant.text });
@@ -449,6 +558,7 @@ export function createAnthropicProvider({ dataRoot, publish, executable = 'claud
       }
     } catch (error) {
       const stopped = controller.signal.aborted;
+      finishPendingEdits(stopped ? 'interrupted' : 'failed');
       const message = stopped ? 'Task stopped.' : String(error?.message || 'Claude could not complete this task.');
       if (!assistant.text && !stopped) session.messages.push({ role: 'error', text: message, turnId });
       send(stopped ? 'turn/interrupted' : 'turn/failed', { threadId: session.id, turn: { id: turnId, ...(stopped ? {} : { error: { message } }) } });

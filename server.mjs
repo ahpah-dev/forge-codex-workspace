@@ -488,7 +488,7 @@ function publish(event) {
 }
 
 codex.subscribe((event) => {
-  if (event.type === 'notification' && /^(item\/(started|delta|completed)|turn\/(started|completed|failed|interrupted))$/.test(event.method || '')) {
+  if (event.type === 'notification' && /^(item\/(started|delta|completed|fileChange\/patchUpdated)|turn\/(started|completed|failed|interrupted))$/.test(event.method || '')) {
     invalidateThreadHistory(event.params?.threadId);
   }
   if (event.type === 'notification' && event.method === 'error' && event.params?.threadId) turnErrors.set(event.params.threadId, event.params.error);

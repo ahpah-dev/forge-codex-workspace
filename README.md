@@ -20,6 +20,8 @@ Screenshots use a local demo project with generic account details.
 
 ## Windows app
 
+File edits appear in expandable code cards with line numbers and additions/removals. While a task is running, **Follow code** keeps the latest patch lines visible; scroll up to pause following. Claude Write/Edit inputs stream during generation. Codex and external providers show patches whenever their runtime exposes them, so some edits arrive as a complete patch rather than character by character. Proposed edits are not marked as applied until the tool finishes.
+
 Download the latest Windows x64 installer from [GitHub Releases](https://github.com/davidegeric-cloud/forge-codex-workspace/releases/latest). Run the installer, then launch Forge from the Start menu or desktop shortcut. Sign in to Codex once in the Codex app or Codex CLI; Forge uses that saved local account automatically.
 
 To build the installer yourself, use Node.js 18 or newer on Windows x64, run `npm install`, then `npm run dist:win`. The installer is written to `release/Forge-Setup-1.0.14-x64.exe`. The desktop app bundles its Codex runtime and does not need a global Node.js install.
