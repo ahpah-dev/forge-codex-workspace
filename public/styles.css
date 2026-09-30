@@ -137,7 +137,7 @@ button { -webkit-tap-highlight-color: transparent; }
 .welcome-view { position: absolute; inset: 0; min-width: 0; min-height: 0; }
 .welcome-eyebrow { display: none; }
 .welcome-hero { position: absolute; top: calc(50% - 250px); left: 50%; display: flex; align-items: center; width: min(1200px, calc(100% - 84px)); gap: 14px; transform: translateX(-50%); }
-.welcome-mark { display: grid; place-items: center; width: 43px; height: 43px; flex: 0 0 auto; color: var(--ink); }
+.welcome-mark { display: grid; place-items: center; width: 43px; height: 43px; flex: 0 0 auto; color: var(--brand); }
 .welcome-mark .gpt-mark { width: 34px; height: 34px; }
 .welcome-copy-block { display: flex; flex-direction: column; gap: 4px; }
 .welcome-hero h1 { margin: 0; color: var(--ink); font-size: calc(23px * var(--ui-scale)); font-weight: 580; letter-spacing: -.03em; }
@@ -303,7 +303,7 @@ button { -webkit-tap-highlight-color: transparent; }
 .file-link-icon { display: inline-grid; place-items: center; flex: 0 0 auto; }
 .file-link-icon svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 1.35; stroke-linecap: round; stroke-linejoin: round; }
 .assistant-progress { display: inline-flex; align-items: center; min-height: 34px; margin: 3px 0 5px; padding: 5px 9px 5px 6px; gap: 8px; border: 1px solid var(--line); border-radius: 999px; color: var(--ink); background: var(--paper); box-shadow: 0 2px 8px color-mix(in srgb, var(--accent) 2%, transparent); vertical-align: middle; animation: progress-in .2s ease-out both; }
-.assistant-progress-mark { width: 21px; height: 21px; flex: 0 0 auto; object-fit: contain; animation: gpt-mark-spin 3.2s cubic-bezier(.45,.05,.55,.95) infinite; transform-origin: center; }
+.assistant-progress-mark { width: 21px; height: 21px; flex: 0 0 auto; color: var(--accent); animation: gpt-mark-spin 3.2s cubic-bezier(.45,.05,.55,.95) infinite; transform-origin: center; }
 .assistant-progress-copy { color: var(--ink); font-size: calc(11px * var(--ui-scale)); font-weight: 560; letter-spacing: -.01em; }
 .assistant-progress-live { margin-left: 3px; padding: 3px 5px; border: 1px solid var(--line); border-radius: 5px; color: var(--muted); font-size: calc(8px * var(--ui-scale)); font-weight: 700; letter-spacing: .08em; line-height: 1; }
 .assistant-progress-live::before { display: inline-block; width: 5px; height: 5px; margin: 0 4px 1px 0; border-radius: 50%; background: color-mix(in srgb, var(--success) 85%, var(--paper)); content: ""; animation: agent-pulse 1.5s ease-in-out infinite; }

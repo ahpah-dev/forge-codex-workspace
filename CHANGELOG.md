@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.13
+
+- Restored the OpenAI mark's theme colors in the welcome screen and activity spinner.
+- Rebuilt the Windows icon in multiple sizes with transparent corners for clearer taskbar and desktop shortcut display.
+
 ## 1.0.12
 
 - Kept the OpenAI mark for the welcome screen and live activity spinner, with no background tile behind the welcome mark.
