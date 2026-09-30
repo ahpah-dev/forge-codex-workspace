@@ -160,6 +160,15 @@
             </label>
             <p class="model-routing-note" id="model-routing-note" role="status">Off · your selected model is used as-is. When on, automatic choices never use GPT-5.6. Claude and custom provider selections remain manual.</p>
           </section>
+          <section class="appearance-section model-routing-section" aria-labelledby="external-approval-heading">
+            <div class="appearance-section-title"><h3 id="external-approval-heading">External model permissions</h3><span>Claude · API providers · OpenRouter · NVIDIA</span></div>
+            <label class="model-routing-toggle" for="external-approval-requests">
+              <span class="model-routing-copy"><strong>Ask before granting extra access</strong><small>When an external model needs additional file, command, or network permissions, show Accept and Decline. Turn this off to let those models run without Forge approval prompts.</small></span>
+              <span class="model-routing-switch"><input id="external-approval-requests" type="checkbox" role="switch" checked><span class="model-routing-track" aria-hidden="true"><i></i></span></span>
+            </label>
+            <p class="model-routing-note">Official Codex models run without approval prompts and have full file-system and network access. Plan and Ask modes stay read-only.</p>
+            <p class="model-routing-note" id="external-approval-status" role="status" aria-live="polite">Permission prompts are on for external models.</p>
+          </section>
           <section class="appearance-section"><div class="appearance-section-title"><h3>Start with a theme</h3><span id="appearance-preset-label">Linen</span></div><div class="theme-presets" id="theme-presets" role="group" aria-label="Theme presets"></div></section>
           <section class="appearance-section free-routing-section" aria-labelledby="free-routing-heading">
             <div class="appearance-section-title"><h3 id="free-routing-heading">Free Auto Route</h3><span class="routing-badge">OpenRouter → NVIDIA NIM</span></div>

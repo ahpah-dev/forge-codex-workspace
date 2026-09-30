@@ -268,6 +268,7 @@ export function createAnthropicProvider({ dataRoot, publish, executable = 'claud
 
   async function requestPermission(session, turnId, toolName, input, options) {
     if (options.signal?.aborted) return { behavior: 'deny', message: 'The task was stopped.' };
+    if (session.askBeforeExternalActions === false) return { behavior: 'allow', updatedInput: input, toolUseID: input?.tool_use_id };
     const requestId = randomUUID();
     const id = 'anthropic:' + requestId;
     const details = {
@@ -447,7 +448,7 @@ export function createAnthropicProvider({ dataRoot, publish, executable = 'claud
     }
   }
 
-  async function startTurn({ threadId, text, model, cwd, readOnly = false, planningMode = false }) {
+  async function startTurn({ threadId, text, model, cwd, readOnly = false, planningMode = false, askBeforeExternalActions = true }) {
     if (planningMode) {
       readOnly = true;
       text = `Planning mode: inspect the project and produce an actionable implementation plan with steps, affected files, tradeoffs, and validation. Ask clarifying questions when needed. Do not edit files or implement the plan.\n\n${text}`;
@@ -461,6 +462,7 @@ export function createAnthropicProvider({ dataRoot, publish, executable = 'claud
     if (threadId && !session) throw new Error('That Claude session could not be found. Start a new session and try again.');
     if (session && String(session.cwd).toLowerCase() !== String(cwd).toLowerCase()) throw new Error('Open the folder where this Claude session started to continue it.');
     if (session && activeTurns.has(session.id)) throw new Error('This Claude session already has a task running.');
+    session && (session.askBeforeExternalActions = askBeforeExternalActions !== false);
     const firstTurn = !session;
     const turnId = randomUUID();
     if (!session) {
@@ -480,6 +482,7 @@ export function createAnthropicProvider({ dataRoot, publish, executable = 'claud
       };
       sessions.unshift(session);
     }
+    session.askBeforeExternalActions = askBeforeExternalActions !== false;
     session.name = session.name || summarize(text, 68) || 'Claude task';
     session.messages.push({ id: 'user-' + turnId, turnId, role: 'user', text });
     session.updatedAt = Date.now();

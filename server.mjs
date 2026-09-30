@@ -26,7 +26,7 @@ const host = '127.0.0.1';
 const sessionToken = randomBytes(32).toString('hex');
 const bridgeToken = randomBytes(32).toString('hex');
 const ignoredFolders = new Set(['.git', 'node_modules', '.next', 'dist', 'build', 'coverage', '.turbo', '.venv', 'venv', '__pycache__']);
-const defaultSettings = { activeWorkspace: '', recentWorkspaces: [], providers: [], freeRouting: { enabled: false, codexFallback: false } };
+const defaultSettings = { activeWorkspace: '', recentWorkspaces: [], providers: [], askExternalApprovals: true, freeRouting: { enabled: false, codexFallback: false } };
 
 let settings = await loadSettings();
 let activeWorkspace = await normalizeSavedWorkspace(settings.activeWorkspace);
@@ -63,7 +63,7 @@ async function loadSettings() {
       baseUrl: String(provider.baseUrl || ''),
       models: Array.isArray(provider.models) ? provider.models.filter((model) => model && /^[\w./:@+-]{1,180}$/.test(model.id || '')).slice(0, 100).map((model) => ({ id: model.id, name: String(model.name || model.id).slice(0, 180) })) : [],
     })) : [];
-    return { ...defaultSettings, ...saved, freeRouting: { enabled: saved.freeRouting?.enabled === true, codexFallback: saved.freeRouting?.codexFallback === true }, recentWorkspaces: Array.isArray(saved.recentWorkspaces) ? saved.recentWorkspaces : [], providers };
+    return { ...defaultSettings, ...saved, askExternalApprovals: saved.askExternalApprovals !== false, freeRouting: { enabled: saved.freeRouting?.enabled === true, codexFallback: saved.freeRouting?.codexFallback === true }, recentWorkspaces: Array.isArray(saved.recentWorkspaces) ? saved.recentWorkspaces : [], providers };
   } catch {
     return { ...defaultSettings };
   }
@@ -378,7 +378,7 @@ class CodexAppServer {
         continue;
       }
       if (Object.hasOwn(message, 'id') && typeof message.method === 'string') {
-        this.serverRequests.set(String(message.id), message.method);
+        this.serverRequests.set(String(message.id), { method: message.method, params: message.params || {} });
         this.emit({ type: 'server-request', id: message.id, method: message.method, params: message.params || {} });
       } else if (Object.hasOwn(message, 'id')) {
         const pending = this.pending.get(String(message.id));
@@ -545,9 +545,13 @@ async function startCodexTask(input, cwd, { announceContinuation, signal } = {})
     if ((history.thread.modelProvider || 'openai') !== providerId) throw new Error('Start a new session to switch providers.');
   }
   const readOnly = Boolean(input.readOnly || input.planningMode);
+  const officialCodex = providerId === 'openai';
+  const unrestricted = !readOnly && (officialCodex || !settings.askExternalApprovals);
+  const sandbox = readOnly ? 'read-only' : unrestricted ? 'danger-full-access' : 'workspace-write';
+  const approvalPolicy = officialCodex || !settings.askExternalApprovals || readOnly ? 'never' : 'on-request';
   if (signal?.aborted) throw new Error('The continuation was stopped.');
   if (!threadId) {
-    const startParams = { cwd, model, sandbox: readOnly ? 'read-only' : 'workspace-write', approvalPolicy: 'on-request', personality: 'pragmatic' };
+    const startParams = { cwd, model, sandbox, approvalPolicy, personality: 'pragmatic' };
     if (provider) { startParams.modelProvider = provider.id; startParams.config = providerThreadConfig(provider); }
     threadId = (await codex.rpc('thread/start', startParams)).thread.id;
     invalidateThreadHistory(threadId);
@@ -571,7 +575,8 @@ async function startCodexTask(input, cwd, { announceContinuation, signal } = {})
   const turn = await codex.rpc('turn/start', {
     threadId, cwd, input: [{ type: 'text', text: input.text }], model: model || undefined, effort,
     collaborationMode: { mode: input.planningMode ? 'plan' : 'default', settings: { model, reasoning_effort: effort, developer_instructions: null } },
-    sandboxPolicy: readOnly ? { type: 'readOnly', networkAccess: false } : { type: 'workspaceWrite', writableRoots: [cwd], networkAccess: false },
+    approvalPolicy,
+    sandboxPolicy: readOnly ? { type: 'readOnly', networkAccess: false } : unrestricted ? { type: 'dangerFullAccess' } : { type: 'workspaceWrite', writableRoots: [cwd], networkAccess: false },
   });
   const turnId = turn.turn?.id || null;
   if (announceContinuation) {
@@ -672,6 +677,7 @@ async function getAppState() {
     codexCli,
     models,
     providers: publicProviders(encryptedProviderKeys),
+    askExternalApprovals: settings.askExternalApprovals !== false,
     freeRouting: freeRoutingStatus(encryptedProviderKeys),
     anthropic: anthropicStatus,
     limits,
@@ -847,6 +853,12 @@ async function handleApi(req, res, url) {
         initialAppState = null;
         return json(res, 200, { freeRouting: freeRoutingStatus(keys), providers: publicProviders(keys) });
       }
+      if (route === '/api/permissions/settings') {
+        settings.askExternalApprovals = input.askExternalApprovals !== false;
+        await saveSettings();
+        initialAppState = null;
+        return json(res, 200, { askExternalApprovals: settings.askExternalApprovals });
+      }
       if (route === '/api/routing/discover') {
         freeRouter.reset();
         const results = await Promise.allSettled([freeRouter.catalog('openrouter', { force: true }), freeRouter.catalog('nvidia', { force: true })]);
@@ -976,6 +988,7 @@ async function handleApi(req, res, url) {
             cwd: activeWorkspace,
             readOnly: Boolean(input.readOnly),
             planningMode: Boolean(input.planningMode),
+            askBeforeExternalActions: settings.askExternalApprovals,
           });
           return json(res, 200, { ...result, providerId });
         }
@@ -1019,14 +1032,24 @@ async function handleApi(req, res, url) {
           anthropic.resolveApproval(id, decision);
           return json(res, 200, { ok: true });
         }
-        const method = codex.serverRequests.get(String(id));
-        if (!method) throw new Error('That request has already completed.');
-        if (method === 'commandExecution/requestApproval' || method === 'fileChange/requestApproval') {
+        const pending = codex.serverRequests.get(String(id));
+        if (!pending) throw new Error('That request has already completed.');
+        const method = typeof pending === 'string' ? pending : pending.method;
+        const params = typeof pending === 'string' ? {} : pending.params || {};
+        if (['commandExecution/requestApproval', 'fileChange/requestApproval', 'item/commandExecution/requestApproval', 'item/fileChange/requestApproval'].includes(method)) {
           const decision = String(input.decision || 'decline');
           if (!['accept', 'acceptForSession', 'decline', 'cancel'].includes(decision)) throw new Error('Choose a valid approval decision.');
           codex.reply(id, { decision });
-        } else if (method === 'tool/requestUserInput') {
+        } else if (method === 'item/permissions/requestApproval') {
+          const decision = String(input.decision || 'decline');
+          if (!['accept', 'decline'].includes(decision)) throw new Error('Choose Accept or Decline.');
+          codex.reply(id, { permissions: decision === 'accept' ? params.permissions || {} : {}, scope: input.scope === 'session' ? 'session' : 'turn' });
+        } else if (method === 'tool/requestUserInput' || method === 'item/tool/requestUserInput') {
           codex.reply(id, { answers: input.answers || {} });
+        } else if (method === 'execCommandApproval' || method === 'applyPatchApproval') {
+          const decision = String(input.decision || 'decline');
+          if (!['accept', 'decline'].includes(decision)) throw new Error('Choose Accept or Decline.');
+          codex.reply(id, { decision: decision === 'accept' ? 'approved' : { denied: { rejection: 'Declined in Forge.' } } });
         } else {
           codex.rejectRequest(id);
         }

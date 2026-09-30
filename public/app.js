@@ -44,6 +44,8 @@ const state = {
   effort: localStorage.getItem('forge.effort') || 'medium',
   autoModelRouting: localStorage.getItem('forge.auto-model-routing') === 'true',
   freeRouting: { enabled: false, codexFallback: false },
+  askExternalApprovals: true,
+  permissionSettingsBusy: false,
   routingDraftDirty: false,
   routingBusy: false,
   fallbackSourceThreadId: null,
@@ -487,6 +489,35 @@ function renderFreeRoutingSettings() {
   $('#routing-save').disabled = state.routingBusy;
   $('#routing-use').hidden = !route.enabled;
   if (!state.routingDraftDirty && !state.routingBusy && $('#routing-status').textContent === 'Save both API keys to get started.' && route.openrouterConfigured && route.nvidiaConfigured) $('#routing-status').textContent = route.enabled ? 'Free Auto Route is ready in your model picker.' : 'Both keys are saved. Enable the route and save to use it.';
+}
+
+function renderPermissionSettings() {
+  const toggle = $('#external-approval-requests');
+  if (!toggle) return;
+  toggle.checked = state.askExternalApprovals;
+  toggle.disabled = state.permissionSettingsBusy;
+  $('#external-approval-status').textContent = state.permissionSettingsBusy
+    ? 'Saving permission setting…'
+    : state.askExternalApprovals ? 'Permission prompts are on for external models.' : 'Permission prompts are off for external models.';
+}
+
+async function saveExternalApprovalSetting() {
+  if (state.permissionSettingsBusy) return;
+  const previous = state.askExternalApprovals;
+  const next = $('#external-approval-requests').checked;
+  state.permissionSettingsBusy = true;
+  renderPermissionSettings();
+  try {
+    const result = await api('/api/permissions/settings', { method: 'POST', body: { askExternalApprovals: next } });
+    state.askExternalApprovals = result.askExternalApprovals !== false;
+    showToast(state.askExternalApprovals ? 'External model permission prompts enabled.' : 'External models can now run without Forge approval prompts.');
+  } catch (error) {
+    state.askExternalApprovals = previous;
+    showToast(error.message || 'Could not save permission settings.', 'error');
+  } finally {
+    state.permissionSettingsBusy = false;
+    renderPermissionSettings();
+  }
 }
 
 function selectFreeRouteModel() {
@@ -1129,6 +1160,7 @@ function renderAll() {
   renderContext();
   renderSurface();
   renderFreeRoutingSettings();
+  renderPermissionSettings();
 }
 
 async function refreshState({ quiet = false } = {}) {
@@ -1137,6 +1169,7 @@ async function refreshState({ quiet = false } = {}) {
     state.account = snapshot.account;
     state.codexCli = snapshot.codexCli || null;
     state.providers = snapshot.providers || [];
+    state.askExternalApprovals = snapshot.askExternalApprovals !== false;
     state.freeRouting = snapshot.freeRouting || { enabled: false, codexFallback: false };
     state.anthropic = snapshot.anthropic || { available: false, connected: false };
     state.models = buildModelCatalog(snapshot.models || [], state.providers, state.anthropic);
@@ -2473,23 +2506,25 @@ function renderApproval(event) {
   card.className = 'approval-card';
   const method = event.method || '';
   const params = event.params || {};
-  const isCommand = method === 'commandExecution/requestApproval';
-  const isFile = method === 'fileChange/requestApproval';
-  const isQuestion = method === 'tool/requestUserInput';
+  const isCommand = ['commandExecution/requestApproval', 'item/commandExecution/requestApproval', 'execCommandApproval'].includes(method);
+  const isFile = ['fileChange/requestApproval', 'item/fileChange/requestApproval', 'applyPatchApproval'].includes(method);
+  const isPermissions = method === 'item/permissions/requestApproval';
+  const isQuestion = method === 'tool/requestUserInput' || method === 'item/tool/requestUserInput';
   const isAnthropic = method === 'anthropic/tool/requestApproval';
+  const actor = state.threadProviderId === 'openai' ? 'Codex' : state.threadProviderId === 'anthropic' ? 'Claude' : state.providers.find((provider) => provider.id === state.threadProviderId)?.name || 'This model';
   const title = document.createElement('div');
   title.className = 'approval-topline';
   const mark = document.createElement('span');
   mark.textContent = isAnthropic ? 'A' : '◈';
   const titleText = isAnthropic
     ? 'Claude wants permission · ' + (params.toolName || 'project tool')
-    : isCommand ? 'Codex wants to run a command' : isFile ? 'Codex needs approval for file changes' : isQuestion ? 'Codex has a question' : 'Codex is requesting extra access';
+    : isPermissions ? `${actor} requests extra access` : isCommand ? `${actor} wants to run a command` : isFile ? `${actor} needs approval for file changes` : isQuestion ? `${actor} has a question` : 'Codex is requesting extra access';
   title.append(mark, document.createTextNode(titleText));
   card.append(title);
   if (isCommand) {
     const command = document.createElement('pre');
     command.className = 'approval-command';
-    command.textContent = Array.isArray(params.command) ? params.command.join(' ') : params.command || 'Review the requested command in Codex.';
+    command.textContent = Array.isArray(params.command) ? params.command.join(' ') : params.command || (params.commandActions || []).map((action) => action.cmd || action.name).filter(Boolean).join('\n') || 'Review the requested command.';
     card.append(command);
     if (params.cwd) {
       const cwd = document.createElement('p');
@@ -2500,6 +2535,25 @@ function renderApproval(event) {
     const note = document.createElement('p');
     note.textContent = params.reason || 'Review and approve the proposed change before it is applied.';
     card.append(note);
+    if (method === 'applyPatchApproval' && params.fileChanges) {
+      const changes = document.createElement('pre');
+      changes.className = 'approval-command';
+      changes.textContent = Object.keys(params.fileChanges).join('\n') || 'File changes requested';
+      card.append(changes);
+    }
+  } else if (isPermissions) {
+    const note = document.createElement('p');
+    note.textContent = params.reason || `${actor} needs additional workspace or network permissions to continue.`;
+    card.append(note);
+    const requested = document.createElement('pre');
+    requested.className = 'approval-command';
+    requested.textContent = JSON.stringify(params.permissions || {}, null, 2);
+    card.append(requested);
+    if (params.cwd) {
+      const cwd = document.createElement('p');
+      cwd.textContent = `Working directory · ${params.cwd}`;
+      card.append(cwd);
+    }
   } else if (isAnthropic) {
     const note = document.createElement('p');
     note.textContent = params.title || 'Review Claude’s requested action before it runs.';
@@ -2564,6 +2618,9 @@ function renderApproval(event) {
   if (isAnthropic) {
     addButton('Allow once', 'approval-allow', 'accept');
     if (params.suggestions?.length) addButton('Allow for this session', '', 'acceptForSession');
+    addButton('Decline', 'approval-deny', 'decline');
+  } else if (isPermissions) {
+    addButton('Accept', 'approval-allow', 'accept');
     addButton('Decline', 'approval-deny', 'decline');
   } else if (isQuestion) addButton('Send answer', 'approval-allow', 'answer');
   else if (isCommand || isFile) {
@@ -2951,6 +3008,7 @@ $('#workspace-card').addEventListener('click', chooseWorkspaceFolder);
 $('#settings-button').setAttribute('aria-label', 'Settings');
 $('#settings-button').title = 'Settings';
 $('#settings-button').addEventListener('click', () => window.ForgeTheme.open());
+$('#external-approval-requests').addEventListener('change', saveExternalApprovalSetting);
 $('#routing-save').addEventListener('click', saveFreeRouting);
 $('#routing-discover').addEventListener('click', discoverFreeRouting);
 for (const id of ['free-routing-enabled', 'codex-free-fallback', 'routing-openrouter-key', 'routing-nvidia-key']) {
