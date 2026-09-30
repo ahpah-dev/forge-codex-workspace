@@ -1,6 +1,7 @@
 {
   "name": "forge-codex-workspace",
   "version": "1.0.7",
+  "license": "MIT",
   "description": "Forge local desktop coding workspace connected to Codex",
   "author": "Forge",
   "private": true,
