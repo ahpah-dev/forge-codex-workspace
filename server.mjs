@@ -10,6 +10,7 @@ import { decryptProviderKey, encryptProviderKey, readEncryptedProviderKeys, writ
 import { createAnthropicProvider } from './anthropic-provider.mjs';
 import { createFreeRouter, FREE_PROVIDER_ID, FREE_KEY_IDS, isCodexLimitError, exhaustedCodexLimit } from './free-router.mjs';
 import { bridgeResponses, createChatProviderRouter, providerApiFormat } from './responses-bridge.mjs';
+import { browserCodexConfig } from './browser-config.mjs';
 
 const execFileAsync = promisify(execFile);
 const appRoot = path.dirname(fileURLToPath(import.meta.url));
@@ -153,6 +154,10 @@ function providerThreadConfig(provider) {
       },
     },
   };
+}
+
+function runtimeThreadConfig(provider, cwd = activeWorkspace) {
+  return { ...browserCodexConfig(appRoot, dataRoot, cwd), ...(provider ? providerThreadConfig(provider) : {}) };
 }
 
 async function normalizeSavedWorkspace(candidate) {
@@ -560,8 +565,8 @@ async function startCodexTask(input, cwd, { announceContinuation, signal } = {})
   const approvalPolicy = officialCodex || !settings.askExternalApprovals || readOnly ? 'never' : 'on-request';
   if (signal?.aborted) throw new Error('The continuation was stopped.');
   if (!threadId) {
-    const startParams = { cwd, model, sandbox, approvalPolicy, personality: 'pragmatic' };
-    if (provider) { startParams.modelProvider = provider.id; startParams.config = providerThreadConfig(provider); }
+    const startParams = { cwd, model, sandbox, approvalPolicy, personality: 'pragmatic', config: runtimeThreadConfig(provider, cwd) };
+    if (provider) startParams.modelProvider = provider.id;
     threadId = (await codex.rpc('thread/start', startParams)).thread.id;
     invalidateThreadHistory(threadId);
     resumedThreads.add(threadId);
@@ -766,6 +771,8 @@ async function readThreadHistory(threadId) {
         messages.push({ id: item.id, turnId: turn.id, role: 'activity', activityType: 'command', command: item.command, output: item.aggregatedOutput || '', status: item.status?.type || item.status || '', exitCode: item.exitCode });
       } else if (item.type === 'fileChange') {
         messages.push({ id: item.id, turnId: turn.id, role: 'activity', activityType: 'files', changes: item.changes || [], status: item.status?.type || item.status || '' });
+      } else if (item.type === 'mcpToolCall') {
+        messages.push({ id: item.id, turnId: turn.id, role: 'activity', activityType: 'tool', toolName: (item.server === 'forge_browser' ? 'Browser' : item.server) + ' · ' + String(item.tool || '').replace(/^browser_/, '').replaceAll('_', ' '), input: item.arguments, output: (item.result?.content || []).filter((part) => part.type === 'text').map((part) => part.text).join('\n').slice(0, 24000) || item.error?.message || '', status: item.status?.type || item.status || '' });
       } else if (item.type === 'collabAgentToolCall' || item.type === 'subAgentActivity') {
         messages.push({ id: item.id, turnId: turn.id, role: 'agent-event', item });
       }
@@ -815,7 +822,7 @@ function resumeThread(threadId) {
   const load = getThreadHistory(threadId).then((history) => {
     const provider = history.thread.modelProvider === FREE_PROVIDER_ID ? { id: FREE_PROVIDER_ID }
       : settings.providers.find((item) => item.id === history.thread.modelProvider);
-    return codex.rpc('thread/resume', { threadId, ...(provider ? { config: providerThreadConfig(provider) } : {}) });
+    return codex.rpc('thread/resume', { threadId, config: runtimeThreadConfig(provider, history.thread.cwd || activeWorkspace) });
   }).then((result) => {
     resumedThreads.add(threadId);
     return result;
@@ -990,7 +997,7 @@ async function handleApi(req, res, url) {
           beforeTurnId,
           cwd: activeWorkspace,
           modelProvider: providerId,
-          ...(provider ? { config: providerThreadConfig(provider) } : {}),
+          config: runtimeThreadConfig(provider, activeWorkspace),
         });
         const forkedThreadId = result.thread?.id;
         if (!forkedThreadId) throw new Error('Codex did not return the new conversation branch.');

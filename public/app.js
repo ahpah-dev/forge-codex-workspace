@@ -2292,6 +2292,7 @@ function activityStatusForItem(item) {
       return files.length ? 'Editing ' + activityText(files.join(', '), 78) : 'Applying file changes';
     }
     case 'webSearch': return item.query ? 'Searching the web for ' + activityText(item.query, 62) : 'Searching the web';
+    case 'mcpToolCall': return browserActivityLabel(item.tool, item.arguments || {});
     case 'anthropicTool': return 'Using ' + (item.toolName || 'a project tool');
     case 'anthropicAgentActivity': return 'Starting ' + (item.name || 'a Claude') + ' agent';
     case 'collabAgentToolCall':
@@ -2309,6 +2310,12 @@ function activityStatusForItem(item) {
   }
 }
 
+function browserActivityLabel(tool, args = {}) {
+  const name = String(tool || '').split('__').at(-1);
+  const labels = { browser_navigate: 'Opening browser page', browser_snapshot: 'Inspecting browser page', browser_take_screenshot: 'Taking browser screenshot', browser_click: 'Clicking', browser_type: 'Typing into', browser_drag: 'Dragging', browser_mouse_drag_xy: 'Dragging in the browser', browser_console_messages: 'Checking browser console', browser_network_requests: 'Checking browser requests', browser_run_code: 'Verifying browser behavior', browser_evaluate: 'Inspecting browser state', browser_resize: 'Resizing browser viewport', browser_tabs: 'Managing browser tabs', browser_wait_for: 'Waiting for browser update', browser_close: 'Closing browser page' };
+  return (labels[name] || String(name || 'Browser action').replace(/^browser_/, '').replaceAll('_', ' ')) + (args.url ? ' · ' + activityText(args.url, 65) : args.element || args.startElement ? ' · ' + activityText(args.element || args.startElement, 60) : '');
+}
+
 function completedActivityStatus(item) {
   if (item?.type === 'agentMessage') return 'Response complete';
   if (item?.type === 'commandExecution') {
@@ -2321,6 +2328,7 @@ function completedActivityStatus(item) {
     return files.length ? 'Updated ' + activityText(files.join(', '), 80) : 'File changes applied';
   }
   if (item?.type === 'webSearch') return 'Finished web search' + (item.query ? ' · ' + activityText(item.query, 62) : '');
+  if (item?.type === 'mcpToolCall') return item.error ? 'Browser action failed' : 'Finished · ' + browserActivityLabel(item.tool, item.arguments || {});
   if (item?.type === 'anthropicTool') return 'Finished ' + (item.toolName || 'project tool');
   if (item?.type === 'anthropicAgentActivity') return (item.name || 'Agent') + ' finished its task';
   return 'Finished the current action';
@@ -2387,7 +2395,7 @@ function upsertActivity(item, turnId) {
   if (item.type === 'commandExecution') activityType = 'command';
   else if (item.type === 'fileChange') activityType = 'files';
   else if (item.type === 'webSearch') activityType = 'search';
-  else if (item.type === 'anthropicTool') activityType = 'tool';
+  else if (item.type === 'anthropicTool' || item.type === 'mcpToolCall') activityType = 'tool';
   else return;
   const existing = state.messages.find((message) => message.role === 'activity' && message.id === item.id);
   const next = {
@@ -2396,12 +2404,12 @@ function upsertActivity(item, turnId) {
     role: 'activity',
     activityType,
     command: item.command || '',
-    output: item.aggregatedOutput || '',
+    output: item.aggregatedOutput || (item.type === 'mcpToolCall' ? (item.result?.content || []).filter((part) => part.type === 'text').map((part) => part.text).join('\n').slice(0, 24000) || item.error?.message || '' : ''),
     changes: item.changes?.length ? item.changes : existing?.changes || [],
     query: item.query || '',
-    toolName: item.toolName || '',
-    input: item.input || null,
-    statusMessage: item.statusMessage || '',
+    toolName: item.toolName || (item.type === 'mcpToolCall' ? (item.server === 'forge_browser' ? 'Browser' : item.server) + ' · ' + String(item.tool || '').replace(/^browser_/, '').replaceAll('_', ' ') : ''),
+    input: item.input || item.arguments || null,
+    statusMessage: item.statusMessage || (item.type === 'mcpToolCall' ? browserActivityLabel(item.tool, item.arguments || {}) : ''),
     status: itemStatus(item),
     exitCode: item.exitCode,
   };
@@ -2656,7 +2664,7 @@ function handleCodexEvent(event) {
   if (method === 'item/started') {
     if (state.threadId && params.threadId !== state.threadId) return;
     setActivityStatus(activityStatusForItem(params.item));
-    if (params.item?.type === 'commandExecution' || params.item?.type === 'fileChange' || params.item?.type === 'anthropicTool') upsertActivity(params.item, params.turnId);
+    if (['commandExecution', 'fileChange', 'anthropicTool', 'mcpToolCall'].includes(params.item?.type)) upsertActivity(params.item, params.turnId);
     upsertAgentItem(params.item, params.turnId);
     if (params.item?.type === 'agentMessage') {
       let message = state.messages.find((candidate) => candidate.role === 'assistant' && candidate.turnId === params.turnId && candidate.id === params.item.id);
@@ -2678,7 +2686,7 @@ function handleCodexEvent(event) {
       if (!message) { message = { id: item.id, turnId: params.turnId, role: 'assistant', text: '' }; state.messages.push(message); }
       if (item.text) message.text = item.text;
       message.pending = false;
-    } else if (item.type === 'commandExecution' || item.type === 'fileChange' || item.type === 'webSearch' || item.type === 'anthropicTool') upsertActivity(item, params.turnId);
+    } else if (['commandExecution', 'fileChange', 'webSearch', 'anthropicTool', 'mcpToolCall'].includes(item.type)) upsertActivity(item, params.turnId);
     upsertAgentItem(item, params.turnId);
     renderSurface();
     return;

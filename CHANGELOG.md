@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.16
+
+- Bundled Chromium and Playwright browser tools for Codex, Claude, and external provider sessions. Agents can open local web apps, inspect pages, click, type, drag, take screenshots, and check console and network activity without installing a separate browser.
+- Enabled browser tools for new, resumed, and branched sessions, using isolated browser profiles. Added browser activity cards to the conversation and saved session history.
+
 ## 1.0.15
 
 - Added explicit file creation and exact-text edit tools for NVIDIA and other routed models whose runtime lacks a native patch tool. File operations use the existing runtime sandbox and approval controls, and custom patch calls now emit complete input events.

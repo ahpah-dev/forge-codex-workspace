@@ -4,6 +4,8 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { deleteSession, forkSession, getSessionMessages, query } from '@anthropic-ai/claude-agent-sdk';
+import { fileURLToPath } from 'node:url';
+import { browserMcpConfig } from './browser-config.mjs';
 
 const execFileAsync = promisify(execFile);
 const THREAD_PREFIX = 'anthropic:';
@@ -130,6 +132,7 @@ export function createAnthropicProvider({ dataRoot, publish, executable = 'claud
   }
 
   function describeTool(name, input = {}) {
+    if (name.startsWith('mcp__forge_browser__')) return 'Browser · ' + name.split('__').at(-1).replace(/^browser_/, '').replaceAll('_', ' ') + (input.url ? ' · ' + summarize(input.url, 65) : input.element ? ' · ' + summarize(input.element, 60) : '');
     const filename = String(input.file_path || input.path || input.filePath || '').split(/[\\/]/).filter(Boolean).slice(-2).join('/');
     switch (name) {
       case 'Bash': return 'Running ' + summarize(input.command || 'a terminal command', 80);
@@ -378,6 +381,7 @@ export function createAnthropicProvider({ dataRoot, publish, executable = 'claud
       const options = {
         cwd: session.cwd,
         model,
+        mcpServers: { forge_browser: { type: 'stdio', ...browserMcpConfig(path.dirname(fileURLToPath(import.meta.url)), dataRoot, session.cwd) } },
         resume: session.hasTranscript ? session.anthropicSessionId : undefined,
         sessionId: session.hasTranscript ? undefined : session.anthropicSessionId,
         permissionMode: readOnly ? 'plan' : 'acceptEdits',

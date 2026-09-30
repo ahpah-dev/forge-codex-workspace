@@ -24,7 +24,7 @@ File edits appear in expandable code cards with line numbers and additions/remov
 
 Download the latest Windows x64 installer from [GitHub Releases](https://github.com/davidegeric-cloud/forge-codex-workspace/releases/latest). Run the installer, then launch Forge from the Start menu or desktop shortcut. Sign in to Codex once in the Codex app or Codex CLI; Forge uses that saved local account automatically.
 
-To build the installer yourself, use Node.js 18 or newer on Windows x64, run `npm install`, then `npm run dist:win`. The installer is written to `release/Forge-Setup-1.0.15-x64.exe`. The desktop app bundles its Codex runtime and does not need a global Node.js install.
+To build the installer yourself, use Node.js 18 or newer on Windows x64, run `npm install`, then `npm run dist:win`. The installer is written to `release/Forge-Setup-1.0.16-x64.exe`. The desktop app bundles its Codex runtime and does not need a global Node.js install.
 
 ## Start from source
 
@@ -70,6 +70,12 @@ The top **Files**, **Changes**, and **Agents** controls open their respective to
 The Changes panel summarizes modified files and Git line totals. Select a file to inspect its diff, including staged and unstaged edits, deleted files, and untracked text files, or open its source in Files. Use the refresh control to pick up external edits. File activity cards show per-file additions and removals when Git can calculate them.
 
 Assistant Markdown renders local workspace file links as compact clickable chips that open the file in Forge's preview pane, including paths containing spaces or parentheses.
+
+## Browser verification
+
+Forge bundles Chromium and Playwright browser tools. Agents can open local preview URLs, click, type, drag, take screenshots, and inspect console or network errors. Browser tools are enabled automatically for Codex, Claude, and compatible external models, including resumed sessions. They use isolated browser profiles. Ask the agent to verify a specific interaction and report the observed result.
+
+For source builds, run `npm run browser:install` to install the pinned browser runtime. Windows packaging runs this step automatically.
 
 ## Local data
 
