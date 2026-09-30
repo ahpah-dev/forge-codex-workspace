@@ -34,6 +34,7 @@ const state = {
   diff: '',
   modelId: localStorage.getItem('forge.model') || '',
   effort: localStorage.getItem('forge.effort') || 'medium',
+  autoModelRouting: localStorage.getItem('forge.auto-model-routing') === 'true',
   mode: 'code',
   preferredAccess: localStorage.getItem('forge.access') || 'write',
 };
@@ -517,7 +518,7 @@ function buildModelCatalog(codexModels, providers, anthropicStatus) {
 function renderModels() {
   const select = $('#model-select');
   if (state.modelId === 'gpt-6-sol') state.modelId = 'gpt-6.1-sol';
-  const gpt6Models = state.models.filter((model) => !model.providerId && /^gpt-6(?:\.1)?-/.test(model.id));
+  const gpt6Models = state.models.filter((model) => (!model.providerId || model.providerId === 'openai') && /^gpt-6(?:\.1)?-/.test(model.id));
   const orderedModels = [...state.models].sort((left, right) => {
     const order = (model) => ({ 'gpt-6-astra': 0, 'gpt-6.1-sol': 1, 'gpt-6-luna': 2 }[model.id] ?? 10);
     const priority = order(left) - order(right);
@@ -527,25 +528,35 @@ function renderModels() {
     return leftProvider.localeCompare(rightProvider) || left.name.localeCompare(right.name);
   });
   const savedModel = state.models.find((model) => model.id === state.modelId);
-  const current = gpt6Models.length && savedModel && !savedModel.providerId && !/^gpt-6(?:\.1)?-/.test(savedModel.id)
-    ? state.models.find((model) => model.isDefault && /^gpt-6(?:\.1)?-/.test(model.id)) || gpt6Models[0]
-    : savedModel || state.models.find((model) => model.isDefault) || state.models[0];
+  const automaticCodexModel = state.autoModelRouting && (!savedModel || !savedModel.providerId || savedModel.providerId === 'openai') && !/^gpt-6(?:\.1)?-/.test(savedModel?.id || '');
+  const automaticDefault = automaticCodexModel ? findGpt6Model('luna') || findGpt6Model('sol') || findGpt6Model('astra') : null;
+  const current = automaticCodexModel
+    ? automaticDefault
+    : gpt6Models.length && savedModel && !savedModel.providerId && !/^gpt-6(?:\.1)?-/.test(savedModel.id)
+      ? state.models.find((model) => model.isDefault && /^gpt-6(?:\.1)?-/.test(model.id)) || gpt6Models[0]
+      : savedModel || state.models.find((model) => model.isDefault) || state.models[0];
   select.replaceChildren();
   if (!state.models.length) {
     const option = new Option(state.account?.connected ? 'Models unavailable' : 'Connect to choose a model', '');
     select.add(option);
     select.disabled = true;
     renderModelPicker([]);
+    updateModelRoutingUI();
     return;
   }
   select.disabled = false;
   for (const model of orderedModels) select.add(new Option(model.name, model.id));
+  if (automaticCodexModel && !automaticDefault) {
+    state.modelId = '';
+    localStorage.removeItem('forge.model');
+  }
   if (current) {
     state.modelId = current.id;
     select.value = current.id;
     localStorage.setItem('forge.model', current.id);
   }
   renderModelPicker(orderedModels);
+  updateModelRoutingUI();
   renderEfforts();
   renderModelNotice();
 }
@@ -578,6 +589,64 @@ function normalizeModelCatalog(models) {
   return next;
 }
 
+function findGpt6Model(tier) {
+  const family = state.models.filter((model) => (!model.providerId || model.providerId === 'openai') && /^gpt-6(?:\.1)?-/i.test(model.id));
+  const pattern = new RegExp(tier, 'i');
+  return family.find((model) => pattern.test(model.id)) || family.find((model) => pattern.test(model.name));
+}
+
+function classifyTaskComplexity(prompt, isFirstPrompt) {
+  const text = String(prompt || '').toLowerCase();
+  const words = text.match(/[\p{L}\p{N}_'-]+/gu) || [];
+  const actions = text.match(/\b(?:build|create|implement|add|fix|refactor|migrate|redesign|update|integrate|wire|replace|remove|document|test|optimize|secure|deploy|convert|generate|support|connect|upgrade|audit|rewrite)\b/g) || [];
+  const listItems = text.split('\n').filter((line) => /^\s*(?:[-*•]|\d+[.)])\s+/.test(line)).length;
+  const connectors = text.match(/\b(?:also|additionally|plus|then|and then|as well as|while|finally|in addition)\b/g) || [];
+  const broadScope = /\b(?:entire|whole|from scratch|end.to.end|large.scale|full rewrite|codebase.wide|across (?:the )?(?:whole|entire) (?:app|application|project|codebase)|architecture)\b/.test(text);
+  const subsystems = [
+    /\b(?:ui|front.?end|interface|design system)\b/,
+    /\b(?:api|back.?end|server|service)\b/,
+    /\b(?:database|storage|schema)\b/,
+    /\b(?:auth|login|identity|permissions?)\b/,
+    /\b(?:tests?|coverage|quality)\b/,
+    /\b(?:deploy|deployment|ci\/cd|pipeline)\b/,
+    /\b(?:migration|performance|security|integration)\b/,
+  ].filter((pattern) => pattern.test(text)).length;
+  const wordCount = words.length;
+  const exceptionallyBroad = isFirstPrompt && wordCount >= 240 && broadScope && subsystems >= 3 && actions.length >= 6 && (listItems >= 4 || connectors.length >= 5);
+  if (exceptionallyBroad) return { tier: 'astra', reason: 'exceptionally broad first task' };
+  const substantial = (isFirstPrompt && (actions.length >= 4 || listItems >= 3 || (actions.length >= 3 && wordCount >= 55) || (listItems >= 2 && actions.length >= 2 && wordCount >= 38)))
+    || (actions.length >= 4 && wordCount >= 75)
+    || (listItems >= 3 && wordCount >= 55)
+    || (broadScope && actions.length >= 2 && wordCount >= 45);
+  return substantial ? { tier: 'sol', reason: 'multi-part or broad task' } : { tier: 'luna', reason: 'standard task' };
+}
+
+function chooseAutomaticModel(prompt, isFirstPrompt) {
+  const complexity = classifyTaskComplexity(prompt, isFirstPrompt);
+  const fallbackOrder = { luna: ['luna', 'sol', 'astra'], sol: ['sol', 'luna', 'astra'], astra: ['astra', 'sol', 'luna'] }[complexity.tier];
+  const model = fallbackOrder.map(findGpt6Model).find(Boolean);
+  return model ? { model, ...complexity } : null;
+}
+
+function updateModelRoutingUI() {
+  const toggle = $('#auto-model-routing');
+  const note = $('#model-routing-note');
+  const mode = $('#model-picker-mode');
+  if (toggle) toggle.checked = state.autoModelRouting;
+  const hasGpt6 = state.models.some((model) => (!model.providerId || model.providerId === 'openai') && /^gpt-6(?:\.1)?-/i.test(model.id));
+  if (note) note.textContent = state.autoModelRouting
+    ? state.models.length && !hasGpt6
+      ? 'On · this Codex account has no GPT-6 models available right now, so automatic routing will pause instead of falling back to GPT-5.6.'
+      : 'On · GPT-6 Luna handles most tasks; GPT-6.1 Sol steps up for substantial multi-part work; GPT-6 Astra is reserved for rare, exceptionally broad first prompts. GPT-5.6 is never selected.'
+    : 'Off · your selected model is used as-is. When on, automatic choices never use GPT-5.6. Claude and custom provider selections remain manual.';
+  const current = state.models.find((model) => model.id === state.modelId);
+  const isCodexModel = !current?.providerId || current.providerId === 'openai';
+  if (mode) {
+    mode.textContent = state.autoModelRouting && isCodexModel ? 'AUTO · GPT-6' : 'MODEL';
+    mode.classList.toggle('is-auto', state.autoModelRouting && isCodexModel);
+  }
+}
+
 function renderModelPicker(orderedModels = state.models) {
   const trigger = $('#model-picker-trigger');
   const optionsHost = $('#model-options');
@@ -585,8 +654,8 @@ function renderModelPicker(orderedModels = state.models) {
   const models = orderedModels || [];
   const current = models.find((model) => model.id === state.modelId);
   trigger.disabled = !models.length;
-  $('#model-picker-label').textContent = current?.name || (state.account?.connected ? 'Models unavailable' : 'Connect Codex');
-  trigger.title = current ? (current.id === current.name ? current.name : `${current.name} · ${current.id}`) : 'Choose a model';
+  $('#model-picker-label').textContent = current?.name || (state.autoModelRouting ? 'GPT-6 unavailable' : state.account?.connected ? 'Models unavailable' : 'Connect Codex');
+  trigger.title = current ? (current.id === current.name ? current.name : `${current.name} · ${current.id}`) : state.autoModelRouting ? 'No GPT-6 model is available in this Codex account' : 'Choose a model';
   triggerMark.className = `model-picker-mark tier-${getModelTier(current?.id, current?.providerId)}`;
   triggerMark.replaceChildren(current ? createModelIcon(current.id, current.providerId) : createOpenAIMark());
   $('#model-picker-count').textContent = models.length ? models.length + ' models' : '';
@@ -1985,17 +2054,34 @@ async function sendMessage(textOverride) {
   if (state.isBusy) return;
   if (state.threadLoading) { showToast('Wait for the selected session to finish opening.'); return; }
   if (!state.workspace) { openWorkspaceDialog(); return; }
-  const selectedModel = state.models.find((model) => model.id === state.modelId);
-  if (!selectedModel) { showToast('Choose an available model before sending.'); return; }
-  const usesAnthropic = selectedModel.providerId === 'anthropic';
-  if (!usesAnthropic && !state.account?.connected) { showToast('Connect your ChatGPT account before sending a Codex task.'); setModal('login-modal', true); return; }
-  if (usesAnthropic && !state.anthropic?.available) { showToast('Install Claude Code, then reopen Model providers to connect your Claude subscription.'); setModal('providers-modal', true); return; }
+  let selectedModel = state.models.find((model) => model.id === state.modelId);
   const textarea = $('#prompt-input');
   const text = String(textOverride ?? textarea.value).trim();
   if (!text) return;
+  if (!selectedModel) {
+    showToast(state.autoModelRouting ? 'Automatic routing needs a GPT-6 model in your Codex account. No GPT-5.6 fallback was used.' : 'Choose an available model before sending.', 'error');
+    return;
+  }
+  let automaticRoute = null;
+  if (state.autoModelRouting && (!selectedModel.providerId || selectedModel.providerId === 'openai')) {
+    automaticRoute = chooseAutomaticModel(text, !state.threadId);
+    if (!automaticRoute) {
+      showToast('Automatic routing needs a GPT-6 model in your Codex account. No GPT-5.6 fallback was used.', 'error');
+      return;
+    }
+    selectedModel = automaticRoute.model;
+    state.modelId = selectedModel.id;
+    localStorage.setItem('forge.model', selectedModel.id);
+    renderModelPicker();
+    renderEfforts();
+    updateModelRoutingUI();
+  }
+  const usesAnthropic = selectedModel.providerId === 'anthropic';
+  if (!usesAnthropic && !state.account?.connected) { showToast('Connect your ChatGPT account before sending a Codex task.'); setModal('login-modal', true); return; }
+  if (usesAnthropic && !state.anthropic?.available) { showToast('Install Claude Code, then reopen Model providers to connect your Claude subscription.'); setModal('providers-modal', true); return; }
   state.pendingSend = true;
   state.isBusy = true;
-  state.activityStatus = 'Starting task';
+  state.activityStatus = automaticRoute ? `Auto · ${selectedModel.name} · ${automaticRoute.reason}` : 'Starting task';
   state.messages.push({ id: `user-${Date.now()}`, role: 'user', text });
   state.messages.push({ id: `pending-${Date.now()}`, role: 'assistant', turnId: null, text: '', pending: true });
   textarea.value = '';
@@ -2093,6 +2179,27 @@ $('#workspace-card').addEventListener('click', chooseWorkspaceFolder);
 $('#settings-button').setAttribute('aria-label', 'Settings');
 $('#settings-button').title = 'Settings';
 $('#settings-button').addEventListener('click', () => window.ForgeTheme.open());
+updateModelRoutingUI();
+$('#auto-model-routing').addEventListener('change', (event) => {
+  state.autoModelRouting = event.currentTarget.checked;
+  localStorage.setItem('forge.auto-model-routing', String(state.autoModelRouting));
+  if (state.autoModelRouting) {
+    const current = state.models.find((model) => model.id === state.modelId);
+    if (!current?.providerId || current.providerId === 'openai') {
+      const preferred = findGpt6Model('luna') || findGpt6Model('sol') || findGpt6Model('astra');
+      if (preferred) {
+        state.modelId = preferred.id;
+        localStorage.setItem('forge.model', preferred.id);
+        renderModels();
+      } else if (state.models.length) {
+        state.modelId = '';
+        localStorage.removeItem('forge.model');
+        renderModels();
+      }
+    }
+  }
+  updateModelRoutingUI();
+});
 $('#workspace-modal-open').addEventListener('click', () => openWorkspace($('#workspace-modal-path').value));
 $('#open-project-submit').addEventListener('click', () => {
   const value = $('#workspace-path').value.trim();
@@ -2163,6 +2270,7 @@ $('#model-options').addEventListener('click', (event) => {
   setModelPickerOpen(false, true);
   renderModelPicker();
   renderEfforts();
+  updateModelRoutingUI();
   renderAccount();
 });
 $('#model-options').addEventListener('keydown', (event) => {

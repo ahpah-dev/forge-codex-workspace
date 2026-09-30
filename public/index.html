@@ -98,7 +98,7 @@
                   <div class="model-picker" id="model-picker">
                     <button class="model-picker-trigger" id="model-picker-trigger" type="button" aria-haspopup="listbox" aria-expanded="false" aria-controls="model-options" title="Choose a model" disabled>
                       <span class="model-picker-mark tier-default" id="model-picker-mark" aria-hidden="true"></span>
-                      <span class="model-picker-copy"><small>MODEL</small><strong id="model-picker-label">Loading models…</strong></span>
+                      <span class="model-picker-copy"><small id="model-picker-mode">MODEL</small><strong id="model-picker-label">Loading models…</strong></span>
                       <svg class="model-picker-chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg>
                     </button>
                     <div class="model-picker-menu" id="model-picker-menu" hidden>
@@ -141,8 +141,16 @@
 
     <div class="modal-backdrop" id="settings-modal" hidden>
       <section class="dialog-card appearance-dialog" role="dialog" aria-modal="true" aria-labelledby="appearance-title" aria-describedby="appearance-description">
-        <header class="appearance-header"><div><div class="dialog-eyebrow">MAKE IT YOURS</div><h2 id="appearance-title">Appearance</h2><p id="appearance-description">Your workspace, your style. Changes preview instantly.</p></div><button class="icon-button" id="appearance-close" type="button" aria-label="Close settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 7 10 10M17 7 7 17"/></svg></button></header>
+        <header class="appearance-header"><div><div class="dialog-eyebrow">SETTINGS</div><h2 id="appearance-title">Settings</h2><p id="appearance-description">Personalize Forge and choose how it routes Codex tasks.</p></div><button class="icon-button" id="appearance-close" type="button" aria-label="Close settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 7 10 10M17 7 7 17"/></svg></button></header>
         <div class="appearance-body">
+          <section class="appearance-section model-routing-section" aria-labelledby="model-routing-heading">
+            <div class="appearance-section-title"><h3 id="model-routing-heading">Automatic model routing</h3><span>GPT-6 family only</span></div>
+            <label class="model-routing-toggle" for="auto-model-routing">
+              <span class="model-routing-copy"><strong>Choose the best GPT-6 model for each task</strong><small>Most prompts go to GPT-6 Luna. Larger, multi-part requests can step up to GPT-6.1 Sol. GPT-6 Astra is reserved for rare, exceptionally broad tasks.</small></span>
+              <span class="model-routing-switch"><input id="auto-model-routing" type="checkbox" role="switch" aria-describedby="model-routing-note"><span class="model-routing-track" aria-hidden="true"><i></i></span></span>
+            </label>
+            <p class="model-routing-note" id="model-routing-note" role="status">Off · your selected model is used as-is. When on, automatic choices never use GPT-5.6. Claude and custom provider selections remain manual.</p>
+          </section>
           <section class="appearance-section"><div class="appearance-section-title"><h3>Start with a theme</h3><span id="appearance-preset-label">Linen</span></div><div class="theme-presets" id="theme-presets" role="group" aria-label="Theme presets"></div></section>
           <section class="appearance-section"><div class="appearance-section-title"><h3>Colors</h3><span>Pick a color or enter its hex code</span></div><div class="theme-color-grid" id="theme-colors"></div><details class="appearance-advanced"><summary>More colors · messages, code, status &amp; model tiers</summary><div class="theme-color-grid" id="theme-colors-advanced"></div></details></section>
           <section class="appearance-section"><div class="appearance-section-title"><h3>Typography</h3><span>Interface, conversation &amp; code</span></div><div class="theme-font-grid" id="theme-fonts"></div><p class="appearance-font-note">Use an installed font or upload WOFF2, WOFF, TTF, or OTF files (up to 5 MB each). Uploaded fonts stay on this device.</p><div class="theme-range-grid" id="theme-ranges"></div></section>

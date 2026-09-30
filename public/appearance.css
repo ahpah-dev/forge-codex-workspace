@@ -103,6 +103,21 @@ input, textarea, select { accent-color: var(--accent); }
 .appearance-select-field select, .theme-custom-font { font-size: calc(12px * var(--ui-scale)); }
 .theme-font-upload { font-size: calc(10px * var(--ui-scale)); }
 
+.model-routing-toggle { display: flex; align-items: center; justify-content: space-between; padding: 14px 15px; gap: 18px; border: 1px solid var(--line); border-radius: 12px; background: var(--page); cursor: pointer; }
+.model-routing-copy { display: flex; flex-direction: column; min-width: 0; gap: 5px; }
+.model-routing-copy strong { color: var(--ink); font-size: calc(12px * var(--ui-scale)); font-weight: 620; }
+.model-routing-copy small, .model-routing-note { margin: 0; color: var(--muted); font-size: calc(10px * var(--ui-scale)); line-height: 1.55; }
+.model-routing-switch { position: relative; display: inline-flex; width: 42px; height: 25px; flex: 0 0 auto; }
+.model-routing-switch input { position: absolute; width: 1px; height: 1px; margin: 0; opacity: 0; }
+.model-routing-track { display: flex; align-items: center; width: 100%; padding: 3px; border: 1px solid var(--line-dark); border-radius: 999px; background: var(--hover); transition: background .18s ease, border-color .18s ease; }
+.model-routing-track i { width: 17px; height: 17px; border-radius: 50%; background: var(--paper); box-shadow: 0 1px 3px color-mix(in srgb, var(--shadow-color) 20%, transparent); transition: transform .18s cubic-bezier(.2,.8,.2,1), background .18s ease; }
+.model-routing-switch input:checked + .model-routing-track { border-color: var(--accent); background: var(--accent); }
+.model-routing-switch input:checked + .model-routing-track i { transform: translateX(17px); background: var(--on-accent); }
+.model-routing-switch input:focus-visible + .model-routing-track { outline: 2px solid color-mix(in srgb, var(--accent) 40%, var(--line)); outline-offset: 3px; }
+.model-routing-note { padding: 9px 2px 0; }
+.model-picker-copy small#model-picker-mode { transition: color .18s ease; }
+.model-picker-copy small#model-picker-mode.is-auto { color: var(--accent); }
+
 @media (min-width: 761px) and (min-height: 791px) {
   .idea-divider { top: calc(50% + 144px); }
   .idea-grid { top: calc(50% + 170px); }
