@@ -199,15 +199,44 @@ async function readWorkspaceFile(relativePath) {
 }
 
 async function readGitSummary() {
-  if (!activeWorkspace) return { branch: null, changedFiles: 0, entries: [] };
+  if (!activeWorkspace) return { branch: null, changedFiles: 0, added: 0, removed: 0, entries: [] };
+  const workspace = activeWorkspace;
   try {
-    const { stdout } = await execFileAsync('git', ['status', '--short', '--branch'], { cwd: activeWorkspace, timeout: 7000, windowsHide: true, maxBuffer: 1024 * 1024 });
+    const [statusResult, numstatResult] = await Promise.all([
+      execFileAsync('git', ['status', '--short', '--branch', '--untracked-files=all'], { cwd: workspace, timeout: 7000, windowsHide: true, maxBuffer: 1024 * 1024 }),
+      execFileAsync('git', ['diff', '--numstat', 'HEAD', '--'], { cwd: workspace, timeout: 7000, windowsHide: true, maxBuffer: 1024 * 1024 }).catch(() => ({ stdout: '' })),
+    ]);
+    const { stdout } = statusResult;
     const lines = stdout.split(/\r?\n/).filter(Boolean);
     const branchLine = lines.shift() || '';
+    const lineStats = new Map();
+    for (const row of String(numstatResult.stdout || '').split(/\r?\n/).filter(Boolean)) {
+      const match = row.match(/^(\d+|-)\t(\d+|-)\t(.+)$/);
+      if (!match) continue;
+      const filePath = match[3].replaceAll('\\', '/').toLocaleLowerCase();
+      lineStats.set(filePath, { added: Number(match[1]) || 0, removed: Number(match[2]) || 0 });
+    }
     const changed = lines.map((line) => ({ status: line.slice(0, 2).trim() || '·', path: line.slice(3) })).slice(0, 100);
-    return { branch: branchLine.startsWith('## ') ? branchLine.slice(3).split('...')[0] : null, changedFiles: changed.length, entries: changed };
+    for (const entry of changed) {
+      const filePath = entry.path.replaceAll('\\', '/').toLocaleLowerCase();
+      const stats = lineStats.get(filePath) || { added: 0, removed: 0 };
+      if (entry.status === '??') {
+        try {
+          const file = await readFile(path.resolve(workspace, entry.path));
+          if (file.length <= 2 * 1024 * 1024 && !file.includes(0)) {
+            const text = file.toString('utf8');
+            stats.added = text ? text.split(/\r?\n/).length - (text.endsWith('\n') || text.endsWith('\r') ? 1 : 0) : 0;
+          }
+        } catch { /* A file may disappear while the workspace summary is being read. */ }
+      }
+      entry.added = stats.added;
+      entry.removed = stats.removed;
+    }
+    const added = changed.reduce((sum, entry) => sum + entry.added, 0);
+    const removed = changed.reduce((sum, entry) => sum + entry.removed, 0);
+    return { branch: branchLine.startsWith('## ') ? branchLine.slice(3).split('...')[0] : null, changedFiles: changed.length, added, removed, entries: changed };
   } catch {
-    return { branch: null, changedFiles: 0, entries: [] };
+    return { branch: null, changedFiles: 0, added: 0, removed: 0, entries: [] };
   }
 }
 
