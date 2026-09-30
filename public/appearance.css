@@ -12,7 +12,7 @@
 .plus-icon { width: 27px; height: 27px; border-radius: 8px; font-size: calc(23px * var(--ui-scale)); }
 .section-heading { font-size: calc(12px * var(--ui-scale)); }
 .sidebar-empty { padding-top: 16px; font-size: calc(12px * var(--ui-scale)); }
-.forge-symbol, .welcome-mark { color: var(--brand); border-color: color-mix(in srgb, var(--brand) 20%, var(--line)); background: color-mix(in srgb, var(--brand) 8%, var(--paper)); box-shadow: none; }
+.forge-symbol { color: var(--brand); border-color: color-mix(in srgb, var(--brand) 20%, var(--line)); background: color-mix(in srgb, var(--brand) 8%, var(--paper)); box-shadow: none; }
 .welcome-hero, .open-project-panel, .idea-divider, .idea-grid, .composer-dock { max-width: 1000px; }
 .workspace-surface { background-color: var(--page); background-image: none; }
 :root[data-canvas="dots"] .workspace-surface { background-image: radial-gradient(circle, color-mix(in srgb, var(--line) 65%, transparent) 1px, transparent 1px); background-size: 26px 26px; }

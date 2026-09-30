@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.12
+
+- Kept the OpenAI mark for the welcome screen and live activity spinner, with no background tile behind the welcome mark.
+
 ## 1.0.11
 
 - Matched the desktop app, welcome screen, activity indicator, and Windows app icon to the Forge website logo.

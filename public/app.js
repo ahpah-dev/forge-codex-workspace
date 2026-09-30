@@ -73,14 +73,7 @@ function createOpenAIMark() {
   return svg;
 }
 
-function createForgeMark(className = '') {
-  const image = document.createElement('img');
-  image.className = className;
-  image.src = '/assets/mark.svg';
-  image.alt = '';
-  image.setAttribute('aria-hidden', 'true');
-  return image;
-}
+document.querySelector('.welcome-mark')?.append(createOpenAIMark());
 
 function getModelTier(modelId = '', providerId = '') {
   if (providerId) return providerId.toLowerCase().includes('nvidia') ? 'nvidia' : 'provider';
@@ -2061,8 +2054,8 @@ function renderLiveProgress() {
   status.className = 'assistant-progress';
   status.setAttribute('role', 'status');
   status.setAttribute('aria-live', 'polite');
-  const mark = createForgeMark('assistant-progress-mark');
-  mark.setAttribute('aria-hidden', 'true');
+  const mark = createOpenAIMark();
+  mark.classList.add('assistant-progress-mark');
   const copy = document.createElement('span');
   copy.className = 'assistant-progress-copy';
   copy.textContent = state.activityStatus || 'Starting task';
