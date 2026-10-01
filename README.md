@@ -24,7 +24,7 @@ File edits appear in expandable code cards with line numbers and additions/remov
 
 Download the latest Windows x64 installer from [GitHub Releases](https://github.com/davidegeric-cloud/forge-codex-workspace/releases/latest). Run the installer, then launch Forge from the Start menu or desktop shortcut. Sign in to Codex once in the Codex app or Codex CLI; Forge uses that saved local account automatically.
 
-To build the installer yourself, use Node.js 18 or newer on Windows x64, run `npm install`, then `npm run dist:win`. The installer is written to `release/Forge-Setup-1.0.23-x64.exe`. The desktop app bundles its Codex runtime and does not need a global Node.js install.
+To build the installer yourself, use Node.js 18 or newer on Windows x64, run `npm install`, then `npm run dist:win`. The installer is written to `release/Forge-Setup-1.0.24-x64.exe`. The desktop app bundles its Codex runtime and does not need a global Node.js install.
 
 ## Start from source
 
@@ -50,6 +50,8 @@ Use **Manage providers** to add OpenRouter, NVIDIA NIM, or another service that 
 **OpenRouter Free Auto Route:** In Settings, enable the route and enter OpenRouter and NVIDIA NIM API keys. Forge discovers OpenRouter's current catalog and picks an eligible tool-capable model with zero input, output, and other listed prices, preferring stronger coding benchmark results. OpenRouter can still reject a nominally free model when provider capacity or account limits are exhausted; Forge then tries NVIDIA NIM models using your NVIDIA key and account quota. NVIDIA model availability, throughput, and any charges follow NVIDIA's current account terms. For Codex limit fallback, separately enable **Use free routing when Codex is rate limited**. Forge carries the visible conversation into a linked provider session only when a new response cannot start because Codex reports a rate limit. This does not increase Codex limits or make paid external services free.
 
 **Plan mode:** Choose **Plan** beside the composer mode selector to ask for a read-only investigation and implementation plan. Switch back to **Code** to make changes.
+
+**Codex plugins:** Open **Plugins** in the toolbar to search the Codex directory, install or remove plugins, switch installed plugins on or off, and add or refresh marketplace sources. Forge uses the same signed-in Codex profile and marketplace configuration as the Codex app or CLI. Type `@` in a Codex prompt to mention an enabled plugin. Start a new Forge session after installing a plugin or changing its enabled state so Codex can load the updated setup.
 
 ## Workspace and appearance
 

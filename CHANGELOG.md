@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.24
+
+- Added a Codex-synced Plugins manager for installed plugins, discovery, enablement, and marketplace sources.
+- Added `@` plugin suggestions in the composer and native Codex plugin mentions for enabled plugins.
+
 ## 1.0.23
 
 - Added selectable question cards with option descriptions, custom answers, and explicit submission. Selections and input focus stay intact during streaming updates.

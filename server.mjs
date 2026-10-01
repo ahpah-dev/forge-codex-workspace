@@ -2,7 +2,8 @@ import { spawn, execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { randomBytes } from 'node:crypto';
-import { readFile, writeFile, mkdir, readdir, realpath, stat } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, readdir, realpath, stat, rename, unlink } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
@@ -24,11 +25,19 @@ const bundledCodexCli = path.join(appRoot, 'node_modules', '@openai', 'codex', '
 const codexExecutable = process.env.CODEX_CLI || (existsSync(bundledCodexCli) ? process.execPath : 'codex');
 const codexPrefixArgs = process.env.CODEX_CLI || !existsSync(bundledCodexCli) ? [] : [bundledCodexCli];
 const codexArgs = (args) => [...codexPrefixArgs, ...args];
+const codexHome = process.env.CODEX_HOME || path.join(homedir(), '.codex');
 const host = '127.0.0.1';
 const sessionToken = randomBytes(32).toString('hex');
 const bridgeToken = randomBytes(32).toString('hex');
 const ignoredFolders = new Set(['.git', 'node_modules', '.next', 'dist', 'build', 'coverage', '.turbo', '.venv', 'venv', '__pycache__']);
 const defaultSettings = { activeWorkspace: '', recentWorkspaces: [], providers: [], askExternalApprovals: true, freeRouting: { enabled: false, codexFallback: false } };
+let pluginCatalogCache = null;
+let pluginCatalogCacheAt = 0;
+let pluginCatalogLoading = null;
+let installedPluginCache = null;
+let installedPluginCacheAt = 0;
+let marketplaceCache = null;
+let marketplaceCacheAt = 0;
 
 let settings = await loadSettings();
 let activeWorkspace = await normalizeSavedWorkspace(settings.activeWorkspace);
@@ -75,6 +84,123 @@ async function loadSettings() {
 async function saveSettings() {
   await mkdir(dataRoot, { recursive: true });
   await writeFile(settingsPath, `${JSON.stringify(settings, null, 2)}\n`, 'utf8');
+}
+
+async function codexPluginCommand(args, { timeout = 120000 } = {}) {
+  try {
+    const { stdout } = await execFileAsync(codexExecutable, codexArgs(['plugin', ...args]), {
+      timeout,
+      windowsHide: true,
+      maxBuffer: 16 * 1024 * 1024,
+      env: process.env,
+    });
+    return String(stdout || '').trim();
+  } catch (error) {
+    const detail = String(error.stderr || error.stdout || error.message || '').trim().slice(-900);
+    throw new Error(detail || 'Codex could not complete the plugin operation.');
+  }
+}
+
+function parsePluginJson(output, label) {
+  try { return JSON.parse(output); }
+  catch { throw new Error(`Codex returned an unreadable ${label} list. Update Codex, then refresh Plugins.`); }
+}
+
+function compactPlugin(plugin) {
+  return {
+    pluginId: String(plugin.pluginId || ''),
+    name: String(plugin.name || plugin.pluginId || ''),
+    marketplaceName: String(plugin.marketplaceName || ''),
+    version: String(plugin.version || ''),
+    installed: plugin.installed === true,
+    enabled: plugin.enabled === true,
+  };
+}
+
+async function getInstalledPlugins(force = false) {
+  if (!force && installedPluginCache && Date.now() - installedPluginCacheAt < 45000) return installedPluginCache;
+  const output = await codexPluginCommand(['list', '--json']);
+  const payload = parsePluginJson(output, 'installed plugin');
+  installedPluginCache = (payload.installed || []).map(compactPlugin).filter((plugin) => plugin.pluginId);
+  installedPluginCacheAt = Date.now();
+  return installedPluginCache;
+}
+
+async function getPluginCatalog(force = false) {
+  if (!force && pluginCatalogCache && Date.now() - pluginCatalogCacheAt < 120000) return pluginCatalogCache;
+  if (pluginCatalogLoading) return pluginCatalogLoading;
+  pluginCatalogLoading = (async () => {
+    const output = await codexPluginCommand(['list', '--available', '--json'], { timeout: 180000 });
+    const payload = parsePluginJson(output, 'plugin catalog');
+    const catalog = (payload.available || []).map(compactPlugin).filter((plugin) => plugin.pluginId);
+    pluginCatalogCache = catalog;
+    pluginCatalogCacheAt = Date.now();
+    return catalog;
+  })();
+  try { return await pluginCatalogLoading; }
+  finally { pluginCatalogLoading = null; }
+}
+
+async function getPluginMarketplaces(force = false) {
+  if (!force && marketplaceCache && Date.now() - marketplaceCacheAt < 45000) return marketplaceCache;
+  const output = await codexPluginCommand(['marketplace', 'list', '--json']);
+  const payload = parsePluginJson(output, 'marketplace');
+  marketplaceCache = (payload.marketplaces || []).map((marketplace) => ({
+    name: String(marketplace.name || ''),
+    root: String(marketplace.root || ''),
+  })).filter((marketplace) => marketplace.name);
+  marketplaceCacheAt = Date.now();
+  return marketplaceCache;
+}
+
+function invalidatePluginCaches() {
+  pluginCatalogCache = null;
+  installedPluginCache = null;
+  marketplaceCache = null;
+  pluginCatalogCacheAt = 0;
+  installedPluginCacheAt = 0;
+  marketplaceCacheAt = 0;
+}
+
+function validatePluginSelector(pluginId) {
+  const value = String(pluginId || '').trim();
+  if (value.length > 200 || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}@[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$/.test(value)) {
+    throw new Error('Choose a plugin from the Codex plugin list.');
+  }
+  return value;
+}
+
+async function setCodexPluginEnabled(pluginId, enabled) {
+  const configPath = path.join(codexHome, 'config.toml');
+  let source;
+  try { source = await readFile(configPath, 'utf8'); }
+  catch (error) { if (error.code === 'ENOENT') source = ''; else throw error; }
+  const newline = source.includes('\r\n') ? '\r\n' : '\n';
+  const lines = source ? source.split(/\r?\n/) : [];
+  const header = `[plugins."${pluginId}"]`;
+  const start = lines.findIndex((line) => line.trim() === header);
+  const isTable = (line) => /^\s*\[[^\]]+\]\s*(?:#.*)?$/.test(line);
+  let end = lines.length;
+  if (start >= 0) {
+    for (let i = start + 1; i < lines.length; i += 1) {
+      if (isTable(lines[i])) { end = i; break; }
+    }
+    const enabledLine = /^\s*enabled\s*=.*$/;
+    const existing = lines.findIndex((line, index) => index > start && index < end && enabledLine.test(line));
+    if (existing >= 0) lines[existing] = `enabled = ${enabled ? 'true' : 'false'}`;
+    else lines.splice(start + 1, 0, `enabled = ${enabled ? 'true' : 'false'}`);
+  } else {
+    while (lines.length && lines.at(-1) === '') lines.pop();
+    lines.push('', header, `enabled = ${enabled ? 'true' : 'false'}`);
+  }
+  await mkdir(codexHome, { recursive: true });
+  const temporaryPath = `${configPath}.forge-${randomBytes(6).toString('hex')}.tmp`;
+  try {
+    await writeFile(temporaryPath, `${lines.join(newline).replace(/\n*$/, '')}${newline}`, 'utf8');
+    await rename(temporaryPath, configPath);
+  } finally {
+    await unlink(temporaryPath).catch(() => {});
+  }
 }
 
 function normalizeProviderBaseUrl(value) {
@@ -548,6 +674,22 @@ async function startCodexTask(input, cwd, { announceContinuation, signal } = {})
   const provider = providerId === FREE_PROVIDER_ID ? { id: FREE_PROVIDER_ID, name: 'Free Auto Route', models: [{ id: 'auto-free' }] }
     : providerId === 'openai' ? null : settings.providers.find((item) => item.id === providerId);
   if (providerId !== 'openai' && !provider) throw new Error('That provider is no longer configured. Refresh the model list.');
+  const pluginMentions = [];
+  if (Array.isArray(input.pluginMentions) && input.pluginMentions.length) {
+    if (providerId !== 'openai') throw new Error('Codex plugins can only be mentioned in an official Codex session.');
+    if (input.pluginMentions.length > 10) throw new Error('Mention at most ten Codex plugins in one message.');
+    const installed = await getInstalledPlugins();
+    const seen = new Set();
+    for (const requested of input.pluginMentions) {
+      const pluginId = validatePluginSelector(requested?.pluginId);
+      if (seen.has(pluginId)) continue;
+      const plugin = installed.find((candidate) => candidate.pluginId === pluginId && candidate.enabled);
+      if (!plugin) throw new Error('That plugin is not enabled in your Codex account. Refresh the plugin list and try again.');
+      if (!String(input.text || '').includes(`@${plugin.name}`)) throw new Error('The message no longer contains the selected plugin mention.');
+      pluginMentions.push({ type: 'mention', name: plugin.name, path: `plugin://${plugin.name}@${plugin.marketplaceName}` });
+      seen.add(pluginId);
+    }
+  }
   const model = providerId === FREE_PROVIDER_ID ? 'auto-free' : provider ? String(input.providerModel || '') : String(input.model || '');
   if (provider && !provider.models.some((item) => item.id === model)) throw new Error('Choose a model listed under this provider.');
   const encryptedKeys = await readEncryptedProviderKeys(providerKeysPath);
@@ -591,6 +733,7 @@ async function startCodexTask(input, cwd, { announceContinuation, signal } = {})
   const turn = await codex.rpc('turn/start', {
     threadId, cwd, input: [
       ...(input.text ? [{ type: 'text', text: input.text }] : []),
+      ...pluginMentions,
       ...(input.images || []).map((image) => ({ type: 'image', url: image.dataUrl, detail: 'auto' })),
     ], model: model || undefined, effort,
     collaborationMode: { mode: input.planningMode ? 'plan' : 'default', settings: { model, reasoning_effort: effort, developer_instructions: null } },
@@ -867,6 +1010,23 @@ async function handleApi(req, res, url) {
     try { return json(res, 200, await getAppState()); }
     catch (error) { return json(res, 503, { error: error.message || 'Could not connect to Codex.' }); }
   }
+  if (req.method === 'GET' && route === '/api/plugins') {
+    try {
+      const view = url.searchParams.get('view') || 'installed';
+      if (!['installed', 'discover', 'marketplaces'].includes(view)) throw new Error('Choose a valid Plugins view.');
+      if (view === 'marketplaces') return json(res, 200, { view, marketplaces: await getPluginMarketplaces() });
+      const installed = await getInstalledPlugins();
+      if (view === 'installed') return json(res, 200, { view, plugins: installed, total: installed.length });
+      const query = String(url.searchParams.get('q') || '').trim().slice(0, 100).toLocaleLowerCase();
+      const offset = Math.max(0, Number.parseInt(url.searchParams.get('offset') || '0', 10) || 0);
+      const limit = Math.min(60, Math.max(1, Number.parseInt(url.searchParams.get('limit') || '36', 10) || 36));
+      const installedIds = new Set(installed.map((plugin) => plugin.pluginId));
+      const matching = (await getPluginCatalog())
+        .filter((plugin) => !installedIds.has(plugin.pluginId))
+        .filter((plugin) => !query || `${plugin.name} ${plugin.pluginId} ${plugin.marketplaceName}`.toLocaleLowerCase().includes(query));
+      return json(res, 200, { view, plugins: matching.slice(offset, offset + limit), total: matching.length, offset, limit });
+    } catch (error) { return json(res, 503, { error: error.message || 'Could not load Codex plugins.' }); }
+  }
   if (req.method === 'GET' && route === '/api/tree') {
     try { return json(res, 200, { entries: await readTree(url.searchParams.get('dir') || '') }); }
     catch (error) { return json(res, 400, { error: error.message }); }
@@ -883,6 +1043,54 @@ async function handleApi(req, res, url) {
     let input;
     try { input = await bodyJson(req); } catch (error) { return json(res, 400, { error: error.message }); }
     try {
+      if (route === '/api/plugins/install') {
+        const pluginId = validatePluginSelector(input.pluginId);
+        const available = await getPluginCatalog();
+        if (!available.some((plugin) => plugin.pluginId === pluginId)) throw new Error('That plugin is no longer available. Refresh the catalog and try again.');
+        await codexPluginCommand(['add', pluginId, '--json'], { timeout: 240000 });
+        invalidatePluginCaches();
+        return json(res, 200, { ok: true, newSessionRequired: true });
+      }
+      if (route === '/api/plugins/remove') {
+        const pluginId = validatePluginSelector(input.pluginId);
+        const installed = await getInstalledPlugins();
+        if (!installed.some((plugin) => plugin.pluginId === pluginId)) throw new Error('That plugin is no longer installed. Refresh the list and try again.');
+        await codexPluginCommand(['remove', pluginId, '--json'], { timeout: 240000 });
+        invalidatePluginCaches();
+        return json(res, 200, { ok: true, newSessionRequired: true });
+      }
+      if (route === '/api/plugins/enabled') {
+        const pluginId = validatePluginSelector(input.pluginId);
+        const installed = await getInstalledPlugins();
+        if (!installed.some((plugin) => plugin.pluginId === pluginId)) throw new Error('That plugin is no longer installed. Refresh the list and try again.');
+        await setCodexPluginEnabled(pluginId, input.enabled === true);
+        invalidatePluginCaches();
+        return json(res, 200, { ok: true, newSessionRequired: true });
+      }
+      if (route === '/api/plugins/marketplaces/add') {
+        const source = String(input.source || '').trim();
+        if (!source || source.length > 3000 || source.startsWith('-') || /[\u0000-\u001f]/.test(source)) throw new Error('Enter a marketplace Git URL, owner/repository, or local folder path.');
+        await codexPluginCommand(['marketplace', 'add', source], { timeout: 300000 });
+        invalidatePluginCaches();
+        return json(res, 200, { ok: true, marketplaces: await getPluginMarketplaces(true) });
+      }
+      if (route === '/api/plugins/marketplaces/remove') {
+        const name = String(input.name || '').trim();
+        if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$/.test(name) || name.toLowerCase().startsWith('openai-')) throw new Error('Choose a user-added marketplace to remove.');
+        if (!(await getPluginMarketplaces()).some((marketplace) => marketplace.name === name)) throw new Error('That marketplace is no longer configured. Refresh the list and try again.');
+        await codexPluginCommand(['marketplace', 'remove', name]);
+        invalidatePluginCaches();
+        return json(res, 200, { ok: true, marketplaces: await getPluginMarketplaces(true) });
+      }
+      if (route === '/api/plugins/marketplaces/refresh') {
+        const name = String(input.name || '').trim();
+        if (name && !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$/.test(name)) throw new Error('Choose a valid marketplace.');
+        const marketplaces = await getPluginMarketplaces();
+        if (name && !marketplaces.some((marketplace) => marketplace.name === name)) throw new Error('That marketplace is no longer configured. Refresh the list and try again.');
+        await codexPluginCommand(['marketplace', 'upgrade', ...(name ? [name] : [])], { timeout: 300000 });
+        invalidatePluginCaches();
+        return json(res, 200, { ok: true, marketplaces: await getPluginMarketplaces(true) });
+      }
       if (route === '/api/workspaces/open') {
         const workspace = await setWorkspace(input.path);
         return json(res, 200, { workspace });

@@ -38,6 +38,8 @@ const state = {
   expandedDirs: new Set(),
   selectedFile: null,
   activeContextTab: 'files',
+  plugins: { view: 'installed', installed: [], installedLoaded: false, available: [], marketplaces: [], query: '', total: 0, offset: 0, loading: false, busyKey: '', error: '', loaded: false, sourceFormOpen: false, requestId: 0, searchTimer: null, mentionLoading: false, mentionContext: null, mentionRows: [], mentionSelectedIndex: 0 },
+  composerPluginMentions: [],
   collapsedAgentGroups: new Set(['complete']),
   selectedAgentId: null,
   agentFilter: 'all',
@@ -1469,19 +1471,23 @@ function renderContext() {
   $('#files-toggle').setAttribute('aria-pressed', String(isOpen && (state.activeContextTab === 'files' || state.activeContextTab === 'preview')));
   $('#changes-toggle').setAttribute('aria-pressed', String(isOpen && state.activeContextTab === 'changes'));
   $('#agents-toggle').setAttribute('aria-pressed', String(isOpen && state.activeContextTab === 'agents'));
+  $('#plugins-toggle').setAttribute('aria-pressed', String(isOpen && state.activeContextTab === 'plugins'));
   $('#changes-toggle').setAttribute('aria-controls', 'context-panel');
   $('#agents-toggle').setAttribute('aria-controls', 'context-panel');
+  $('#plugins-toggle').setAttribute('aria-controls', 'context-panel');
   $$('.context-tab').forEach((button) => button.setAttribute('aria-pressed', String(state.activeContextTab === button.dataset.contextTab || (button.dataset.contextTab === 'files' && state.activeContextTab === 'preview'))));
   $('#tree-toolbar').hidden = state.activeContextTab !== 'files';
   $('#file-tree').hidden = state.activeContextTab !== 'files';
   $('#file-preview').hidden = state.activeContextTab !== 'preview';
   $('#change-preview').hidden = state.activeContextTab !== 'changes';
   $('#agent-organizer').hidden = state.activeContextTab !== 'agents';
-  $('#context-kicker').textContent = state.activeContextTab === 'changes' ? 'WORKING TREE' : state.activeContextTab === 'agents' ? 'DELEGATED WORK' : 'PROJECT';
-  $('#context-title').textContent = state.activeContextTab === 'changes' ? 'Changes' : state.activeContextTab === 'preview' ? 'Preview' : state.activeContextTab === 'agents' ? 'Subagents' : 'Files';
-  $('#context-footer-label').textContent = state.activeContextTab === 'changes' ? 'GIT WORKING TREE' : state.activeContextTab === 'agents' ? 'CURRENT SESSION' : 'LOCAL WORKSPACE';
-  $('#context-footer-status').textContent = state.workspace?.name || 'Not open';
+  $('#plugin-manager').hidden = state.activeContextTab !== 'plugins';
+  $('#context-kicker').textContent = state.activeContextTab === 'changes' ? 'WORKING TREE' : state.activeContextTab === 'agents' ? 'DELEGATED WORK' : state.activeContextTab === 'plugins' ? 'CODEX ACCOUNT' : 'PROJECT';
+  $('#context-title').textContent = state.activeContextTab === 'changes' ? 'Changes' : state.activeContextTab === 'preview' ? 'Preview' : state.activeContextTab === 'agents' ? 'Subagents' : state.activeContextTab === 'plugins' ? 'Plugins' : 'Files';
+  $('#context-footer-label').textContent = state.activeContextTab === 'changes' ? 'GIT WORKING TREE' : state.activeContextTab === 'agents' ? 'CURRENT SESSION' : state.activeContextTab === 'plugins' ? 'SYNCED WITH CODEX' : 'LOCAL WORKSPACE';
+  $('#context-footer-status').textContent = state.activeContextTab === 'plugins' ? (state.account?.connected ? `ChatGPT ${state.account.planType || 'connected'}` : 'Codex profile') : state.workspace?.name || 'Not open';
   renderAgentOrganizer();
+  if (state.activeContextTab === 'plugins') renderPluginManager();
   if (state.activeContextTab === 'files') {
     const tree = $('#file-tree');
     tree.replaceChildren();
@@ -3342,6 +3348,9 @@ async function sendMessage(textOverride, { readOnlyOverride, routingText, replac
   let selectedModel = state.models.find((model) => model.id === state.modelId);
   const textarea = $('#prompt-input');
   const text = String(textOverride ?? textarea.value).trim();
+  const pluginMentions = textOverride === undefined && (!selectedModel?.providerId || selectedModel.providerId === 'openai')
+    ? state.composerPluginMentions.filter((mention) => text.includes(mention.token)).map((mention) => ({ pluginId: mention.pluginId }))
+    : [];
   const selectedImages = (imagesOverride ?? state.pendingImages).map((image) => {
     const dataUrl = imageDataUrl(image);
     return { ...image, dataUrl, mediaType: imageMediaType(image, dataUrl) };
@@ -3404,6 +3413,8 @@ async function sendMessage(textOverride, { readOnlyOverride, routingText, replac
   state.messages.push(userMessage);
   state.messages.push({ id: `pending-${Date.now()}`, role: 'assistant', turnId: null, text: '', pending: true });
   textarea.value = '';
+  state.composerPluginMentions = [];
+  closePluginMentionMenu();
   setPendingImages([]);
   resizeComposer();
   const assignment = parseAgentAssignment(text);
@@ -3413,6 +3424,7 @@ async function sendMessage(textOverride, { readOnlyOverride, routingText, replac
     const result = await api('/api/messages', { method: 'POST', body: {
       threadId: state.threadId,
       text,
+      pluginMentions,
       model: selectedModel.providerModel || state.modelId,
       providerId: selectedModel.providerId || 'openai',
       providerModel: selectedModel.providerModel || '',
@@ -3487,6 +3499,371 @@ function resizeComposer() {
   grip.setAttribute('aria-valuenow', String(Math.round(textarea.getBoundingClientRect().height)));
 }
 
+function pluginDisplayName(plugin) {
+  if (/^app-[a-f0-9]{24,}$/i.test(plugin.name)) return 'Connected app';
+  return String(plugin.name || plugin.pluginId).replace(/[-_]+/g, ' ').replace(/\b\w/g, (letter) => letter.toLocaleUpperCase());
+}
+
+function renderPluginManager() {
+  const plugins = state.plugins;
+  $('#plugin-account-title').textContent = state.account?.connected ? 'Synced with Codex' : 'Codex profile';
+  $('#plugin-account-description').textContent = state.account?.connected
+    ? 'Same ChatGPT sign-in, plugin installs, and marketplace sources.'
+    : 'Sign in to Codex to sync installs and marketplace sources.';
+  $$('.plugin-view-tabs [data-plugin-view]').forEach((button) => button.setAttribute('aria-pressed', String(button.dataset.pluginView === plugins.view)));
+  $('#plugin-search-toolbar').hidden = plugins.view === 'marketplaces';
+  $('#plugin-source-actions').hidden = plugins.view !== 'marketplaces';
+  $('#plugin-source-form').hidden = plugins.view !== 'marketplaces' || !plugins.sourceFormOpen;
+  $('#plugin-refresh').disabled = Boolean(plugins.busyKey);
+  $('#plugin-marketplaces-refresh').disabled = Boolean(plugins.busyKey);
+  $('#plugin-add-source').disabled = Boolean(plugins.busyKey);
+  $('#plugin-load-more').hidden = plugins.view !== 'discover' || plugins.available.length >= plugins.total || !plugins.available.length;
+  $('#plugin-load-more').disabled = plugins.loading || Boolean(plugins.busyKey);
+  $('#plugin-search-input').value = plugins.query;
+  const status = $('#plugin-status');
+  status.classList.toggle('is-error', Boolean(plugins.error));
+  if (plugins.error) status.textContent = plugins.error;
+  else if (plugins.loading) status.textContent = plugins.view === 'discover' ? 'Searching Codex plugin directory…' : 'Syncing with Codex…';
+  else if (plugins.view === 'installed') status.textContent = `${plugins.installed.length} installed · Shared with your Codex account`;
+  else if (plugins.view === 'discover') status.textContent = `${plugins.total.toLocaleString()} plugins available from your Codex sources`;
+  else status.textContent = `${plugins.marketplaces.length} marketplace ${plugins.marketplaces.length === 1 ? 'source' : 'sources'} configured in Codex`;
+  const list = $('#plugin-list');
+  list.replaceChildren();
+  if (plugins.view === 'marketplaces') {
+    if (!plugins.marketplaces.length) {
+      const empty = document.createElement('div');
+      empty.className = 'context-empty';
+      empty.textContent = 'Codex has no marketplace sources configured yet. Add a GitHub repository, Git URL, or local marketplace folder.';
+      list.append(empty);
+    }
+    for (const marketplace of plugins.marketplaces) {
+      const card = document.createElement('article');
+      card.className = 'plugin-card plugin-marketplace-card';
+      const mark = document.createElement('span');
+      mark.className = 'plugin-card-mark';
+      mark.textContent = '⌘';
+      const copy = document.createElement('span');
+      copy.className = 'plugin-card-copy';
+      const name = document.createElement('strong');
+      name.textContent = marketplace.name;
+      const path = document.createElement('small');
+      path.textContent = marketplace.root;
+      path.title = marketplace.root;
+      copy.append(name, path);
+      card.append(mark, copy);
+      if (!marketplace.name.toLowerCase().startsWith('openai-')) {
+        const remove = document.createElement('button');
+        remove.className = 'plugin-action quiet';
+        remove.type = 'button';
+        remove.textContent = plugins.busyKey === `marketplace:${marketplace.name}` ? 'Removing…' : 'Remove';
+        remove.dataset.pluginAction = 'marketplace-remove';
+        remove.dataset.marketplaceName = marketplace.name;
+        remove.disabled = Boolean(plugins.busyKey);
+        card.append(remove);
+      }
+      list.append(card);
+    }
+    return;
+  }
+  let rows = plugins.view === 'installed' ? plugins.installed : plugins.available;
+  if (plugins.view === 'installed' && plugins.query) {
+    const query = plugins.query.toLocaleLowerCase();
+    rows = rows.filter((plugin) => `${plugin.name} ${plugin.pluginId} ${plugin.marketplaceName}`.toLocaleLowerCase().includes(query));
+  }
+  if (plugins.loading && !rows.length) {
+    const loading = document.createElement('div');
+    loading.className = 'context-empty';
+    loading.textContent = 'Loading plugins from Codex…';
+    list.append(loading);
+    return;
+  }
+  if (!rows.length) {
+    const empty = document.createElement('div');
+    empty.className = 'context-empty';
+    empty.textContent = plugins.view === 'installed'
+      ? 'No installed plugins match that search.'
+      : plugins.query ? 'No Codex plugins match that search.' : 'No plugins are available from the configured Codex marketplaces.';
+    list.append(empty);
+  }
+  for (const plugin of rows) {
+    const card = document.createElement('article');
+    card.className = 'plugin-card';
+    const mark = document.createElement('span');
+    mark.className = 'plugin-card-mark';
+    mark.textContent = '✳';
+    const copy = document.createElement('span');
+    copy.className = 'plugin-card-copy';
+    const name = document.createElement('strong');
+    name.textContent = pluginDisplayName(plugin);
+    name.title = plugin.pluginId;
+    const meta = document.createElement('small');
+    meta.textContent = `${plugin.marketplaceName || 'Codex'}${plugin.version ? ` · v${plugin.version}` : ''}`;
+    copy.append(name, meta);
+    card.append(mark, copy);
+    if (plugins.view === 'installed') {
+      const toggle = document.createElement('button');
+      toggle.className = `plugin-enable${plugin.enabled ? ' enabled' : ''}`;
+      toggle.type = 'button';
+      toggle.textContent = plugins.busyKey === plugin.pluginId ? 'Saving…' : plugin.enabled ? 'On' : 'Off';
+      toggle.setAttribute('aria-label', `${plugin.enabled ? 'Disable' : 'Enable'} ${pluginDisplayName(plugin)}`);
+      toggle.setAttribute('aria-pressed', String(plugin.enabled));
+      toggle.dataset.pluginAction = 'toggle';
+      toggle.dataset.pluginId = plugin.pluginId;
+      toggle.dataset.enabled = String(!plugin.enabled);
+      const remove = document.createElement('button');
+      remove.className = 'plugin-action quiet';
+      remove.type = 'button';
+      remove.textContent = plugins.busyKey === `remove:${plugin.pluginId}` ? 'Removing…' : 'Uninstall';
+      remove.dataset.pluginAction = 'remove';
+      remove.dataset.pluginId = plugin.pluginId;
+      remove.disabled = Boolean(plugins.busyKey);
+      toggle.disabled = Boolean(plugins.busyKey);
+      card.append(toggle, remove);
+    } else {
+      const install = document.createElement('button');
+      install.className = 'plugin-action install';
+      install.type = 'button';
+      install.textContent = plugins.busyKey === `install:${plugin.pluginId}` ? 'Installing…' : 'Install';
+      install.dataset.pluginAction = 'install';
+      install.dataset.pluginId = plugin.pluginId;
+      install.disabled = Boolean(plugins.busyKey);
+      card.append(install);
+    }
+    list.append(card);
+  }
+  $('#plugin-load-more').hidden = plugins.view !== 'discover' || plugins.available.length >= plugins.total || !plugins.available.length;
+  $('#plugin-load-more').disabled = plugins.loading || Boolean(plugins.busyKey);
+}
+
+async function loadPluginView({ append = false, force = false } = {}) {
+  const plugins = state.plugins;
+  const view = plugins.view;
+  const requestId = ++plugins.requestId;
+  const offset = view === 'discover' && append ? plugins.available.length : 0;
+  plugins.loading = true;
+  plugins.error = '';
+  if (!append && view === 'discover') plugins.available = [];
+  renderPluginManager();
+  const params = new URLSearchParams({ view });
+  if (view === 'discover') {
+    params.set('q', plugins.query);
+    params.set('offset', String(offset));
+    params.set('limit', '36');
+  }
+  if (force) params.set('refresh', '1');
+  try {
+    const result = await api(`/api/plugins?${params}`);
+    if (requestId !== plugins.requestId) return;
+    if (view === 'installed') { plugins.installed = result.plugins || []; plugins.installedLoaded = true; }
+    else if (view === 'discover') {
+      plugins.available = append ? [...plugins.available, ...(result.plugins || [])] : (result.plugins || []);
+      plugins.total = result.total || 0;
+      plugins.offset = offset;
+    } else plugins.marketplaces = result.marketplaces || [];
+    plugins.loaded = true;
+  } catch (error) {
+    if (requestId === plugins.requestId) plugins.error = error.message || 'Could not sync plugins with Codex.';
+  } finally {
+    if (requestId === plugins.requestId) {
+      plugins.loading = false;
+      renderPluginManager();
+    }
+  }
+}
+
+async function runPluginAction(action, pluginId, extra = {}) {
+  const plugins = state.plugins;
+  if (plugins.busyKey) return;
+  const key = action === 'remove' ? `remove:${pluginId}` : action === 'install' ? `install:${pluginId}` : action === 'marketplace-remove' ? `marketplace:${extra.name}` : pluginId || action;
+  plugins.busyKey = key;
+  plugins.error = '';
+  renderPluginManager();
+  try {
+    if (action === 'install') await api('/api/plugins/install', { method: 'POST', body: { pluginId } });
+    else if (action === 'remove') await api('/api/plugins/remove', { method: 'POST', body: { pluginId } });
+    else if (action === 'toggle') await api('/api/plugins/enabled', { method: 'POST', body: { pluginId, enabled: extra.enabled } });
+    else if (action === 'marketplace-remove') await api('/api/plugins/marketplaces/remove', { method: 'POST', body: { name: extra.name } });
+    plugins.loaded = false;
+    plugins.installedLoaded = false;
+    await loadPluginView({ force: true });
+    showToast(action === 'install' ? 'Plugin installed in your Codex account. Start a new session to use it.' : action === 'remove' ? 'Plugin removed from your Codex account.' : action === 'toggle' ? 'Plugin setting synced with Codex. Start a new session to apply it.' : 'Marketplace removed from your Codex account.');
+  } catch (error) {
+    plugins.error = error.message || 'Could not update Codex plugins.';
+    showToast(plugins.error, 'error');
+  } finally {
+    plugins.busyKey = '';
+    renderPluginManager();
+  }
+}
+
+async function syncPluginSources() {
+  const plugins = state.plugins;
+  if (plugins.busyKey) return;
+  plugins.busyKey = 'sync';
+  plugins.error = '';
+  renderPluginManager();
+  try {
+    await api('/api/plugins/marketplaces/refresh', { method: 'POST', body: {} });
+    plugins.loaded = false;
+    await loadPluginView({ force: true });
+    showToast('Forge is synced with your Codex plugin sources.');
+  } catch (error) {
+    plugins.error = error.message || 'Could not sync Codex plugin sources.';
+    showToast(plugins.error, 'error');
+  } finally {
+    plugins.busyKey = '';
+    renderPluginManager();
+  }
+}
+
+async function addPluginMarketplace(event) {
+  event.preventDefault();
+  const input = $('#plugin-source-input');
+  const source = input.value.trim();
+  if (!source || state.plugins.busyKey) return;
+  state.plugins.busyKey = 'marketplace-add';
+  state.plugins.error = '';
+  renderPluginManager();
+  try {
+    const result = await api('/api/plugins/marketplaces/add', { method: 'POST', body: { source } });
+    state.plugins.marketplaces = result.marketplaces || [];
+    input.value = '';
+    state.plugins.sourceFormOpen = false;
+    state.plugins.loaded = true;
+    showToast('Marketplace added to your Codex account.');
+  } catch (error) {
+    state.plugins.error = error.message || 'Could not add this marketplace.';
+    showToast(state.plugins.error, 'error');
+  } finally {
+    state.plugins.busyKey = '';
+    renderPluginManager();
+  }
+}
+
+function getPluginMentionContext() {
+  const textarea = $('#prompt-input');
+  const model = state.models.find((item) => item.id === state.modelId);
+  if (model?.providerId && model.providerId !== 'openai') return null;
+  const beforeCursor = textarea.value.slice(0, textarea.selectionStart);
+  const match = /(?:^|\s)@([\w.-]*)$/.exec(beforeCursor);
+  if (!match) return null;
+  return { start: textarea.selectionStart - match[1].length - 1, end: textarea.selectionStart, query: match[1].toLocaleLowerCase() };
+}
+
+function closePluginMentionMenu() {
+  const menu = $('#plugin-mention-menu');
+  menu.hidden = true;
+  $('#prompt-input').setAttribute('aria-expanded', 'false');
+  state.plugins.mentionContext = null;
+  state.plugins.mentionRows = [];
+  state.plugins.mentionSelectedIndex = 0;
+}
+
+function renderPluginMentionMenu() {
+  const list = $('#plugin-mention-options');
+  const plugins = state.plugins;
+  list.replaceChildren();
+  if (plugins.mentionLoading && !plugins.installedLoaded) {
+    const loading = document.createElement('div');
+    loading.className = 'plugin-mention-empty';
+    loading.textContent = 'Loading installed plugins…';
+    list.append(loading);
+    return;
+  }
+  const query = plugins.mentionContext?.query || '';
+  const rows = plugins.installed.filter((plugin) => plugin.enabled && (!query || `${plugin.name} ${plugin.marketplaceName}`.toLocaleLowerCase().includes(query))).slice(0, 10);
+  plugins.mentionRows = rows;
+  plugins.mentionSelectedIndex = Math.min(plugins.mentionSelectedIndex, Math.max(0, rows.length - 1));
+  if (!rows.length) {
+    const empty = document.createElement('div');
+    empty.className = 'plugin-mention-empty';
+    empty.textContent = query ? 'No enabled plugins match that name.' : 'No enabled plugins are available to mention.';
+    list.append(empty);
+    return;
+  }
+  rows.forEach((plugin, index) => {
+    const option = document.createElement('button');
+    option.type = 'button';
+    option.className = 'plugin-mention-option';
+    option.setAttribute('role', 'option');
+    option.setAttribute('aria-selected', String(index === plugins.mentionSelectedIndex));
+    option.dataset.pluginIndex = String(index);
+    const mark = document.createElement('span');
+    mark.className = 'plugin-mention-mark';
+    mark.textContent = '✳';
+    const copy = document.createElement('span');
+    copy.className = 'plugin-mention-copy';
+    const name = document.createElement('strong');
+    name.textContent = pluginDisplayName(plugin);
+    const source = document.createElement('small');
+    source.textContent = plugin.marketplaceName || 'Codex';
+    copy.append(name, source);
+    const hint = document.createElement('span');
+    hint.className = 'plugin-mention-insert-hint';
+    hint.textContent = 'Enter';
+    option.append(mark, copy, hint);
+    option.addEventListener('mousedown', (event) => event.preventDefault());
+    option.addEventListener('click', () => selectPluginMention(plugin));
+    list.append(option);
+  });
+}
+
+async function updatePluginMentionMenu() {
+  const context = getPluginMentionContext();
+  const menu = $('#plugin-mention-menu');
+  if (!context) { closePluginMentionMenu(); return; }
+  state.plugins.mentionContext = context;
+  state.plugins.mentionSelectedIndex = 0;
+  menu.hidden = false;
+  $('#prompt-input').setAttribute('aria-expanded', 'true');
+  if (!state.plugins.installedLoaded && !state.plugins.mentionLoading) {
+    state.plugins.mentionLoading = true;
+    renderPluginMentionMenu();
+    try {
+      const result = await api('/api/plugins?view=installed');
+      state.plugins.installed = result.plugins || [];
+      state.plugins.installedLoaded = true;
+    } catch (error) {
+      state.plugins.mentionRows = [];
+      state.plugins.mentionSelectedIndex = 0;
+      const list = $('#plugin-mention-options');
+      const note = document.createElement('div');
+      note.className = 'plugin-mention-empty';
+      note.textContent = error.message || 'Could not load installed Codex plugins.';
+      list.replaceChildren(note);
+      return;
+    } finally {
+      state.plugins.mentionLoading = false;
+    }
+    const latest = getPluginMentionContext();
+    if (!latest) { closePluginMentionMenu(); return; }
+    state.plugins.mentionContext = latest;
+  }
+  renderPluginMentionMenu();
+}
+
+function selectPluginMention(plugin) {
+  const textarea = $('#prompt-input');
+  const context = state.plugins.mentionContext;
+  if (!context || textarea.value.slice(context.start, context.end).charAt(0) !== '@') return;
+  const token = `@${plugin.name}`;
+  textarea.setRangeText(`${token} `, context.start, context.end, 'end');
+  if (!state.composerPluginMentions.some((mention) => mention.pluginId === plugin.pluginId)) {
+    state.composerPluginMentions.push({ pluginId: plugin.pluginId, token });
+  }
+  closePluginMentionMenu();
+  textarea.focus();
+  resizeComposer();
+}
+
+function movePluginMentionSelection(delta) {
+  const rows = state.plugins.mentionRows;
+  if (!rows.length) return false;
+  state.plugins.mentionSelectedIndex = (state.plugins.mentionSelectedIndex + delta + rows.length) % rows.length;
+  renderPluginMentionMenu();
+  return true;
+}
+
 function positionWelcomeSuggestions() {
   if ($('.workspace-surface').classList.contains('has-conversation')) return;
   const dock = $('#composer-dock');
@@ -3496,7 +3873,7 @@ function positionWelcomeSuggestions() {
 }
 
 function setContextTab(tab, { toggle = false } = {}) {
-  if (!['files', 'changes', 'agents'].includes(tab)) return;
+  if (!['files', 'changes', 'agents', 'plugins'].includes(tab)) return;
   const shell = $('.app-shell');
   const selected = state.activeContextTab === tab || (tab === 'files' && state.activeContextTab === 'preview');
   if (toggle && selected && !shell.classList.contains('context-hidden')) {
@@ -3649,7 +4026,7 @@ $('#image-input').addEventListener('change', (event) => {
   event.currentTarget.value = '';
 });
 $('#cancel-message-edit').addEventListener('click', cancelMessageEdit);
-$('#prompt-input').addEventListener('input', resizeComposer);
+$('#prompt-input').addEventListener('input', () => { resizeComposer(); void updatePluginMentionMenu(); });
 window.addEventListener('forge:appearance', resizeComposer);
 window.addEventListener('resize', resizeComposer);
 const composerGrip = $('#composer-resize-grip');
@@ -3695,6 +4072,14 @@ $('#prompt-input').addEventListener('paste', (event) => {
   }
 });
 $('#prompt-input').addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && !$('#plugin-mention-menu').hidden) { event.preventDefault(); closePluginMentionMenu(); return; }
+  if (!$('#plugin-mention-menu').hidden && event.key === 'ArrowDown' && movePluginMentionSelection(1)) { event.preventDefault(); return; }
+  if (!$('#plugin-mention-menu').hidden && event.key === 'ArrowUp' && movePluginMentionSelection(-1)) { event.preventDefault(); return; }
+  if (!$('#plugin-mention-menu').hidden && event.key === 'Enter' && state.plugins.mentionRows[state.plugins.mentionSelectedIndex]) {
+    event.preventDefault();
+    selectPluginMention(state.plugins.mentionRows[state.plugins.mentionSelectedIndex]);
+    return;
+  }
   if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); sendMessage(); }
 });
 $('#stop-turn').addEventListener('click', interruptTurn);
@@ -3897,7 +4282,57 @@ $('#file-tree').addEventListener('click', async (event) => {
 $('#files-toggle').addEventListener('click', () => setContextTab('files', { toggle: true }));
 $('#changes-toggle').addEventListener('click', () => setContextTab('changes', { toggle: true }));
 $('#agents-toggle').addEventListener('click', () => setContextTab('agents', { toggle: true }));
-$('#context-tabs').addEventListener('click', (event) => { const button = event.target.closest('[data-context-tab]'); if (button) setContextTab(button.dataset.contextTab); });
+$('#plugins-toggle').addEventListener('click', () => {
+  const wasClosed = $('.app-shell').classList.contains('context-hidden') || state.activeContextTab !== 'plugins';
+  setContextTab('plugins', { toggle: true });
+  if (wasClosed && !state.plugins.loaded) void loadPluginView();
+});
+$('#context-tabs').addEventListener('click', (event) => {
+  const button = event.target.closest('[data-context-tab]');
+  if (!button) return;
+  setContextTab(button.dataset.contextTab);
+  if (button.dataset.contextTab === 'plugins' && !state.plugins.loaded) void loadPluginView();
+});
+$$('[data-plugin-view]').forEach((button) => button.addEventListener('click', () => {
+  const view = button.dataset.pluginView;
+  if (state.plugins.view === view) return;
+  state.plugins.view = view;
+  state.plugins.error = '';
+  state.plugins.loaded = false;
+  if (view === 'discover') { state.plugins.query = ''; $('#plugin-search-input').value = ''; }
+  if (view === 'marketplaces') state.plugins.sourceFormOpen = false;
+  void loadPluginView();
+}));
+$('#plugin-search-input').addEventListener('input', (event) => {
+  const plugins = state.plugins;
+  plugins.query = event.currentTarget.value.trim();
+  plugins.available = [];
+  plugins.offset = 0;
+  plugins.loaded = false;
+  clearTimeout(plugins.searchTimer);
+  plugins.searchTimer = setTimeout(() => void loadPluginView(), 240);
+});
+$('#plugin-list').addEventListener('click', (event) => {
+  const button = event.target.closest('[data-plugin-action]');
+  if (!button || button.disabled) return;
+  const action = button.dataset.pluginAction;
+  if (action === 'marketplace-remove') void runPluginAction(action, '', { name: button.dataset.marketplaceName });
+  else void runPluginAction(action, button.dataset.pluginId, { enabled: button.dataset.enabled === 'true' });
+});
+$('#plugin-load-more').addEventListener('click', () => void loadPluginView({ append: true }));
+$('#plugin-refresh').addEventListener('click', () => void syncPluginSources());
+$('#plugin-marketplaces-refresh').addEventListener('click', () => void syncPluginSources());
+$('#plugin-add-source').addEventListener('click', () => {
+  state.plugins.sourceFormOpen = true;
+  renderPluginManager();
+  $('#plugin-source-input').focus();
+});
+$('#plugin-source-cancel').addEventListener('click', () => {
+  state.plugins.sourceFormOpen = false;
+  state.plugins.error = '';
+  renderPluginManager();
+});
+$('#plugin-source-form').addEventListener('submit', addPluginMarketplace);
 $('#agent-search').addEventListener('input', renderAgentOrganizer);
 $('#agent-status-filters').addEventListener('click', (event) => {
   const button = event.target.closest('[data-agent-filter]');
@@ -3927,10 +4362,13 @@ $('.workspace-tool-tabs').addEventListener('keydown', (event) => {
 });
 document.addEventListener('keydown', (event) => {
   if (!(event.ctrlKey || event.metaKey) || !event.shiftKey || event.altKey) return;
-  const index = ['Digit1', 'Digit2', 'Digit3'].indexOf(event.code);
-  if (index < 0 || !state.workspace || $$('.modal-backdrop').some((modal) => !modal.hidden)) return;
+  const index = ['Digit1', 'Digit2', 'Digit3', 'Digit4'].indexOf(event.code);
+  if (index < 0 || (index < 3 && !state.workspace) || $$('.modal-backdrop').some((modal) => !modal.hidden)) return;
   event.preventDefault();
-  setContextTab(['files', 'changes', 'agents'][index], { toggle: true });
+  const tab = ['files', 'changes', 'agents', 'plugins'][index];
+  const wasClosed = $('.app-shell').classList.contains('context-hidden') || state.activeContextTab !== tab;
+  setContextTab(tab, { toggle: true });
+  if (tab === 'plugins' && wasClosed && !state.plugins.loaded) void loadPluginView();
 });
 $('#context-close').addEventListener('click', () => { $('.app-shell').classList.add('context-hidden'); renderContext(); });
 $('#account-menu').addEventListener('click', () => {
