@@ -83,7 +83,7 @@
     root.dataset.canvas = settings.pattern;
     root.dataset.composerShape = settings.composerShape;
     root.dataset.composerHeight = settings.composerHeight ? 'manual' : 'auto';
-    root.style.setProperty('--composer-height', `${settings.composerHeight || 130}px`);
+    root.style.setProperty('--composer-height', `${settings.composerHeight || 110}px`);
     document.querySelector('meta[name="theme-color"]')?.setAttribute('content', settings.colors.page);
     window.dispatchEvent(new Event('forge:appearance'));
   }
@@ -205,7 +205,7 @@
     const shape = document.getElementById('composer-shape');
     if (!shape) return;
     shape.value = settings.composerShape;
-    document.getElementById('composer-height').value = settings.composerHeight || 130;
+    document.getElementById('composer-height').value = settings.composerHeight || 110;
     document.getElementById('composer-height-value').value = settings.composerHeight ? `${Math.round(settings.composerHeight)}px` : 'Automatic';
     document.getElementById('composer-height-auto').setAttribute('aria-pressed', String(!settings.composerHeight));
   }

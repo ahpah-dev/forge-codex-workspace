@@ -9,6 +9,12 @@ html[data-theme-scheme="dark"] {
   --surface-shadow: 0 1px 3px #00000020;
   --floating-shadow: 0 18px 48px #00000045, 0 2px 8px #00000020;
 }
+/* Keep the starter composer compact while leaving the resize control in charge. */
+html[data-composer-height="auto"] .composer-shell { min-height: 142px; padding: 12px 16px 9px; }
+html[data-composer-height="auto"] #prompt-input { min-height: 72px; padding: 3px 2px 8px; }
+html[data-composer-height="auto"] .has-conversation .composer-shell { min-height: 108px; }
+html[data-composer-height="auto"] .has-conversation #prompt-input { min-height: 52px; }
+.workspace-surface:not(.has-conversation) .composer-dock { top: calc(50% - 71px); }
 .topbar { border-bottom-color: var(--surface-border); }
 .section-heading { font-weight: 600; }
 .forge-brand strong, .context-header h2 { letter-spacing: -.025em; }
@@ -32,19 +38,22 @@ html[data-theme-scheme="dark"] {
   box-shadow: 0 3px 16px color-mix(in srgb, var(--shadow-color) 5%, transparent), var(--surface-shadow);
 }
 html[data-composer-shape="rounded"] .composer-shell { border-radius: 18px; }
-html[data-composer-shape="pill"] .composer-shell { padding-right: max(76px, clamp(30px, calc(var(--composer-height, 130px) * .24), 88px)); }
+html[data-composer-shape="pill"] .composer-shell { padding-right: 58px; padding-left: 18px; border-radius: 27px; }
+html[data-composer-height="auto"][data-composer-shape="pill"] .composer-shell { min-height: 136px; padding-top: 12px; padding-bottom: 10px; }
+html[data-composer-height="auto"][data-composer-shape="pill"] .has-conversation .composer-shell { min-height: 112px; }
+html[data-composer-height="auto"][data-composer-shape="pill"] #prompt-input { min-height: 67px; padding-right: 0; }
+html[data-composer-height="auto"][data-composer-shape="pill"] .has-conversation #prompt-input { min-height: 48px; }
 html[data-composer-shape="pill"] .send-button {
   position: absolute;
-  top: 50%;
-  right: 18px;
-  width: 40px;
-  height: 40px;
+  right: 12px;
+  bottom: 9px;
+  width: 36px;
+  height: 36px;
   padding: 0;
   border-radius: 50%;
-  transform: translateY(-50%);
 }
-html[data-composer-shape="pill"] .send-button:hover,
-html[data-composer-shape="pill"] .send-button:disabled { transform: translateY(-50%); }
+html[data-composer-shape="pill"] .send-button:hover { transform: translateY(-1px); }
+html[data-composer-shape="pill"] .send-button:disabled { transform: none; }
 .composer-shell:focus-within {
   border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 6%, transparent), 0 4px 20px color-mix(in srgb, var(--shadow-color) 6%, transparent);
@@ -86,6 +95,22 @@ html[data-composer-shape="pill"] .send-button:disabled { transform: translateY(-
 .theme-preview-composer::after { position: absolute; right: 4px; bottom: 4px; width: 6px; height: 6px; border-radius: 2px; background: var(--preview-accent); content: ""; }
 .theme-color, .appearance-select-field select, .theme-custom-font, .dialog-field select { border-color: var(--surface-border); }
 .theme-color { background: color-mix(in srgb, var(--page) 55%, var(--paper)); }
+@media (max-height: 790px) and (min-width: 761px) {
+  html[data-composer-height="auto"] .composer-shell { min-height: 132px; }
+  html[data-composer-height="auto"] #prompt-input { min-height: 62px; }
+  html[data-composer-height="auto"][data-composer-shape="pill"] .composer-shell { min-height: 128px; }
+}
+@media (max-width: 760px) {
+  .workspace-surface:not(.has-conversation) .composer-dock { top: calc(50% - 67px); }
+  html[data-composer-height="auto"] .composer-shell { min-height: 136px; padding: 11px 13px 9px; }
+  html[data-composer-height="auto"] #prompt-input { min-height: 66px; }
+  html[data-composer-height="auto"] .has-conversation .composer-shell { min-height: 104px; }
+  html[data-composer-height="auto"] .has-conversation #prompt-input { min-height: 48px; }
+  html[data-composer-shape="pill"] .composer-shell { padding: 11px 48px 9px 15px; border-radius: 25px; }
+  html[data-composer-height="auto"][data-composer-shape="pill"] .composer-shell { min-height: 130px; }
+  html[data-composer-height="auto"][data-composer-shape="pill"] .has-conversation .composer-shell { min-height: 108px; }
+  html[data-composer-shape="pill"] .send-button { right: 8px; bottom: 8px; width: 34px; height: 34px; }
+}
 @media (prefers-reduced-motion: reduce) {
   .icon-button, .quiet-button, .topbar-button, .new-task-button, .session-row,
   .model-picker-trigger, .effort-trigger, .theme-preset { transition: none; }
