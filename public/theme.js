@@ -115,7 +115,13 @@
       const swatch = element('span', 'theme-preset-swatch');
       swatch.style.backgroundColor = preset.colors.page;
       swatch.style.borderColor = preset.colors.line;
-      for (const key of ['accent', 'brand', 'ink']) { const dot = element('i'); dot.style.backgroundColor = preset.colors[key]; swatch.append(dot); }
+      swatch.setAttribute('aria-hidden', 'true');
+      for (const key of ['sidebar', 'paper', 'ink', 'muted', 'line', 'accent']) swatch.style.setProperty(`--preview-${key}`, preset.colors[key]);
+      const rail = element('span', 'theme-preview-rail');
+      rail.append(element('span', 'theme-preview-brand'), element('span', 'theme-preview-session'), element('span', 'theme-preview-session'));
+      const workspace = element('span', 'theme-preview-workspace');
+      workspace.append(element('span', 'theme-preview-message'), element('span', 'theme-preview-message short'), element('span', 'theme-preview-composer'));
+      swatch.append(rail, workspace);
       button.append(swatch, element('span', '', preset.name));
       button.addEventListener('click', () => { settings.colors = { ...preset.colors }; settings.preset = id; save(); syncControls(); });
       presetsHost.append(button);
