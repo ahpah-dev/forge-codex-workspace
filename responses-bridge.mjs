@@ -7,7 +7,7 @@ export function toChatRequest(input) {
   const tools = [];
   function register(tool, namespace = '') {
     if (tool.type === 'namespace') { for (const nested of tool.tools || []) register(nested, tool.name); return; }
-    if (!['function', 'custom'].includes(tool.type)) throw new Error(`Free Auto Route does not support the ${tool.type} hosted tool. Disable that tool for this session.`);
+    if (!['function', 'custom'].includes(tool.type)) throw new Error(`The Chat Completions adapter cannot translate the ${tool.type} hosted tool. Configure an MCP/function equivalent or use a provider endpoint that supports this tool.`);
     const source = tool.function || tool;
     const original = source.name;
     if (!original) throw new Error('An inference tool has no name.');
@@ -17,6 +17,7 @@ export function toChatRequest(input) {
     tools.push({ type: 'function', function: {
       name, description: String(source.description || '').slice(0, 10000),
       parameters: tool.type === 'custom' ? { type: 'object', properties: { input: { type: 'string', description: 'The exact free-form tool input.' } }, required: ['input'], additionalProperties: false } : source.parameters || { type: 'object', properties: {} },
+      ...(typeof source.strict === 'boolean' ? { strict: source.strict } : {}),
     } });
   }
   for (const tool of input.tools || []) register(tool);
@@ -63,7 +64,7 @@ export function toChatRequest(input) {
     const content = typeof item.content === 'string' ? item.content : (item.content || []).map((part) => {
       if (['input_text', 'output_text', 'text'].includes(part.type)) return { type: 'text', text: part.text || '' };
       if (part.type === 'input_image') return { type: 'image_url', image_url: { url: part.image_url, detail: part.detail || 'auto' } };
-      throw new Error(`Free Auto Route cannot translate ${part.type} input.`);
+      throw new Error(`The Chat Completions adapter cannot translate ${part.type} input.`);
     });
     const role = item.role === 'developer' ? 'system' : item.role || 'user';
     // NIM accepts content parts for user messages, but requires plain strings
@@ -72,7 +73,47 @@ export function toChatRequest(input) {
       ? content.map((part) => part.text || '').join('\n') : content;
     messages.push({ role, content: normalized });
   }
-  return { request: { messages, ...(tools.length ? { tools, tool_choice: 'auto', parallel_tool_calls: false } : {}) }, toolMap };
+  const { value: toolChoice, allowedNames } = translateToolChoice(input.tool_choice, toolMap, tools.length > 0);
+  const requestTools = allowedNames ? tools.filter((tool) => allowedNames.has(tool.function.name)) : tools;
+  return { request: { messages, ...(requestTools.length ? {
+    tools: requestTools,
+    ...(toolChoice ? { tool_choice: toolChoice } : {}),
+    ...(typeof input.parallel_tool_calls === 'boolean' ? { parallel_tool_calls: input.parallel_tool_calls } : {}),
+  } : {}) }, toolMap, allowedToolNames: allowedNames };
+}
+
+function translateToolChoice(choice, toolMap, hasTools) {
+  if (choice === undefined || choice === null) return { value: hasTools ? 'auto' : undefined, allowedNames: null };
+  if (typeof choice === 'string') {
+    if (['auto', 'none', 'required'].includes(choice)) {
+      if (!hasTools && choice === 'required') throw new Error('This request requires a tool, but no tools were provided.');
+      return { value: hasTools ? choice : undefined, allowedNames: choice === 'none' ? new Set() : null };
+    }
+    throw new Error(`The Chat Completions adapter cannot translate tool choice “${choice}”.`);
+  }
+  const resolveName = (name, namespace = '') => {
+    if (toolMap.has(name)) return name;
+    const matches = [...toolMap.entries()].filter(([, tool]) => tool.name === name && (!namespace || tool.namespace === namespace));
+    if (matches.length === 1) return matches[0][0];
+    if (matches.length > 1) throw new Error(`Tool choice “${name}” is ambiguous across namespaces.`);
+    throw new Error(`Tool choice “${name || '(unnamed)'}” is not present in this request.`);
+  };
+  if (choice?.type === 'function') {
+    const chatName = resolveName(String(choice.name || choice.function?.name || ''), String(choice.namespace || ''));
+    return { value: { type: 'function', function: { name: chatName } }, allowedNames: new Set([chatName]) };
+  }
+  if (choice?.type === 'allowed_tools') {
+    const mode = choice.mode || 'auto';
+    if (!['auto', 'required'].includes(mode)) throw new Error(`The Chat Completions adapter cannot translate allowed-tools mode “${mode}”.`);
+    const tools = Array.isArray(choice.tools) ? choice.tools : [];
+    const allowedNames = new Set(tools.map((tool) => {
+      if (!['function', 'custom'].includes(tool?.type)) throw new Error('Allowed tools must be function or custom tools.');
+      return resolveName(String(tool.name || tool.function?.name || ''), String(tool.namespace || ''));
+    }));
+    if (!allowedNames.size && mode === 'required') throw new Error('This request requires a tool, but its allowed-tools list is empty.');
+    return { value: allowedNames.size ? mode : undefined, allowedNames };
+  }
+  throw new Error('The Chat Completions adapter supports automatic, disabled, required, named, or restricted function tool choices.');
 }
 
 export function fileOperationArguments(operation, args) {
@@ -103,8 +144,9 @@ export function createChatProviderRouter({ provider, model, key, fetchImpl = fet
   return {
     async openCompletion(request, signal, { maxTokens = 16384 } = {}) {
       const body = { ...request, model, stream: true, max_tokens: Math.min(maxTokens, tokenLimit) };
-      // parallel_tool_calls is optional and is not accepted by every NIM model.
-      delete body.parallel_tool_calls;
+      // NVIDIA NIM models may reject parallel_tool_calls; other OpenAI-compatible
+      // providers receive the Codex setting unchanged.
+      if (provider.id === 'nvidia' || new URL(provider.baseUrl).hostname.toLowerCase() === 'integrate.api.nvidia.com') delete body.parallel_tool_calls;
       const invoke = () => fetchImpl(`${provider.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
         method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', Accept: 'text/event-stream' },
         body: JSON.stringify(body), signal,
@@ -139,7 +181,28 @@ export function createChatProviderRouter({ provider, model, key, fetchImpl = fet
   };
 }
 
-export async function* chatChunks(body) {
+function normalizeChatChoice(choice, legacyCallId, inferFinishReason = false) {
+  const delta = choice.delta || choice.message || {};
+  const rawCalls = Array.isArray(delta.tool_calls) ? delta.tool_calls : delta.function_call ? [{ id: legacyCallId, function: delta.function_call }] : [];
+  const tool_calls = rawCalls.map((call, index) => ({ ...call, index: Number.isInteger(call.index) ? call.index : index }));
+  return {
+    ...choice,
+    delta: { ...delta, ...(tool_calls.length ? { tool_calls } : {}) },
+    finish_reason: inferFinishReason ? choice.finish_reason || (tool_calls.length ? (delta.function_call ? 'function_call' : 'tool_calls') : 'stop') : choice.finish_reason,
+  };
+}
+
+export async function* chatChunks(responseOrBody) {
+  const legacyCallId = 'call_' + randomUUID().replaceAll('-', '');
+  const contentType = responseOrBody?.headers?.get?.('content-type')?.toLowerCase() || '';
+  if (contentType.includes('json') && !contentType.includes('event-stream')) {
+    const payload = await responseOrBody.json();
+    if (payload.error) { yield payload; return; }
+    const choices = (payload.choices || []).map((choice) => normalizeChatChoice(choice, legacyCallId, true));
+    yield { ...payload, choices };
+    return;
+  }
+  const body = responseOrBody?.body || responseOrBody;
   const decoder = new TextDecoder();
   let buffer = '';
   for await (const bytes of body) {
@@ -150,20 +213,22 @@ export async function* chatChunks(body) {
       const data = block.split('\n').filter((line) => line.startsWith('data:')).map((line) => line.slice(5).trim()).join('\n');
       if (!data) continue;
       if (data === '[DONE]') return;
-      yield JSON.parse(data);
+      const payload = JSON.parse(data);
+      if (!payload.choices) { yield payload; continue; }
+      yield { ...payload, choices: payload.choices.map((choice) => normalizeChatChoice(choice, legacyCallId)) };
     }
   }
   if (buffer.trim()) throw new Error('The provider returned an incomplete stream.');
 }
 
 export async function bridgeResponses({ input, res, router, signal }) {
-  const { request, toolMap } = toChatRequest(input);
+  const { request, toolMap, allowedToolNames } = toChatRequest(input);
   let route, chunks, firstChunk;
   for (let attempt = 0; attempt < 3; attempt++) {
     const opened = await router.openCompletion(request, signal, { maxTokens: 16384 });
     route = opened.route;
     if (!opened.response.body) throw new Error('The routed provider did not return a response stream.');
-    chunks = chatChunks(opened.response.body);
+    chunks = chatChunks(opened.response);
     try {
       while (true) {
         const next = await chunks.next();
@@ -251,7 +316,7 @@ export async function bridgeResponses({ input, res, router, signal }) {
       const opened = await router.openCompletion(currentRequest, signal, { maxTokens: 32768, route });
       route = opened.route;
       if (!opened.response.body) throw new Error('The provider did not return a recovery stream.');
-      currentChunks = chatChunks(opened.response.body);
+      currentChunks = chatChunks(opened.response);
     }
     if (!finishReason) throw new Error(`${route.name} disconnected before finishing. Partial output was retained; no tools were replayed.`);
     if (message) {
@@ -268,6 +333,7 @@ export async function bridgeResponses({ input, res, router, signal }) {
       const name = call.name.replace(/<\|channel\|>(?:analysis|commentary|final)$/, '');
       const tool = toolMap.get(name);
       if (!tool || !call.id) throw new Error(`The model returned an unknown or incomplete tool call (${String(call.name).slice(0, 64)}).`);
+      if (allowedToolNames && !allowedToolNames.has(name)) throw new Error(`The model called ${name}, which this request did not allow.`);
       const args = JSON.parse(call.arguments || '{}');
       if (tool.custom && typeof args.input !== 'string') throw new Error('A free-form tool call was missing its input.');
       const item = {

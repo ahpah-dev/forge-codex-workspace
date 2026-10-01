@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.29
+
+- Improved custom Chat Completions tool calling by preserving strict schemas, named and restricted tool choices, and parallel-call settings. Added support for non-streaming responses and legacy function-call streams while keeping tool execution inside the Codex runtime.
+
 ## 1.0.28
 
 - Added host-level Windows desktop controls for computer use, including screenshots, pointer movement and clicks, scrolling, keyboard input, and shortcuts across apps.

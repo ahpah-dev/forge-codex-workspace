@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createFreeRouter, isFreeModel, isCodexLimitError, exhaustedCodexLimit } from '../free-router.mjs';
-import { toChatRequest, bridgeResponses } from '../responses-bridge.mjs';
+import { toChatRequest, bridgeResponses, createChatProviderRouter } from '../responses-bridge.mjs';
 
 const free = (id = 'vendor/coder:free', extra = {}) => ({ id, name: id, pricing: { prompt: '0', completion: '0', request: '0' }, supported_parameters: ['tools'], context_length: 128000, ...extra });
 const json = (body, status = 200, headers = {}) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json', ...headers } });
@@ -82,6 +82,44 @@ test('adapter retains namespace functions, tool outputs and exact free-form tool
   assert.equal(toolMap.get('functions__apply_patch').custom, true);
 });
 
+test('adapter preserves strict schemas, named tool choice and parallel-call settings', () => {
+  const { request } = toChatRequest({
+    tools: [{ type: 'function', name: 'read_file', strict: true, parameters: { type: 'object', properties: {}, additionalProperties: false } }],
+    tool_choice: { type: 'function', name: 'read_file' },
+    parallel_tool_calls: true,
+    input: 'Inspect the file',
+  });
+  assert.equal(request.tools[0].function.strict, true);
+  assert.deepEqual(request.tool_choice, { type: 'function', function: { name: 'read_file' } });
+  assert.equal(request.parallel_tool_calls, true);
+});
+
+test('custom Chat Completions providers receive Codex tools and parallel-call settings', async () => {
+  let sent;
+  const router = createChatProviderRouter({
+    provider: { id: 'custom-api', name: 'Custom API', baseUrl: 'https://example.test/v1' },
+    model: 'coding-model', key: 'fixture-key',
+    fetchImpl: async (url, options) => { sent = { url, body: JSON.parse(options.body) }; return successful(); },
+  });
+  await router.openCompletion({ messages: [{ role: 'user', content: 'Edit a file' }], tools: [{ type: 'function', function: { name: 'write_file', parameters: { type: 'object' } } }], parallel_tool_calls: true });
+  assert.equal(sent.url, 'https://example.test/v1/chat/completions');
+  assert.equal(sent.body.tools[0].function.name, 'write_file');
+  assert.equal(sent.body.parallel_tool_calls, true);
+  assert.equal(sent.body.stream, true);
+});
+
+test('adapter limits allowed-tools requests to the requested function set', () => {
+  const { request, allowedToolNames } = toChatRequest({
+    tools: [{ type: 'function', name: 'read_file' }, { type: 'function', name: 'write_file' }],
+    tool_choice: { type: 'allowed_tools', mode: 'required', tools: [{ type: 'function', name: 'read_file' }] },
+    input: 'Inspect the file',
+  });
+  assert.equal(request.tools.length, 1);
+  assert.equal(request.tools[0].function.name, 'read_file');
+  assert.equal(request.tool_choice, 'required');
+  assert.deepEqual([...allowedToolNames], ['read_file']);
+});
+
 test('unsupported history is rejected rather than silently dropped', () => {
   assert.throws(() => toChatRequest({ input: [{ type: 'compaction', encrypted_content: 'opaque' }] }), /Cannot safely translate/);
 });
@@ -134,6 +172,30 @@ test('bridge assembles split tool argument deltas into a valid call', async () =
   const response = stream([{ choices: [{ delta: { tool_calls: [{ index: 0, id: 'c1', function: { name: 'read_file', arguments: '{"path":' } }] } }] }, { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '"a"}' } }] }, finish_reason: 'tool_calls' }] }]);
   await bridgeResponses({ input: { model: 'auto-free', input: 'Inspect', tools: [{ type: 'function', name: 'read_file' }] }, res, router: { openCompletion: async () => ({ response, route: { name: 'Test' } }) } });
   const call = events(res).at(-1).response.output[0];
+  assert.equal(call.name, 'read_file');
+  assert.deepEqual(JSON.parse(call.arguments), { path: 'a' });
+});
+
+test('bridge adapts non-streaming function calls into Codex tool events', async () => {
+  const res = sink();
+  await bridgeResponses({ input: { model: 'custom', input: 'Inspect', tools: [{ type: 'function', name: 'read_file' }] }, res,
+    router: { openCompletion: async () => ({ response: json({ choices: [{ message: { tool_calls: [{ id: 'call_json', type: 'function', function: { name: 'read_file', arguments: '{"path":"a"}' } }] }, finish_reason: 'tool_calls' }] }), route: { name: 'Custom provider' } }) } });
+  const call = events(res).at(-1).response.output[0];
+  assert.equal(call.call_id, 'call_json');
+  assert.equal(call.name, 'read_file');
+  assert.deepEqual(JSON.parse(call.arguments), { path: 'a' });
+});
+
+test('bridge adapts legacy streamed function_call responses', async () => {
+  const res = sink();
+  const response = stream([
+    { choices: [{ delta: { function_call: { name: 'read_file' } } }] },
+    { choices: [{ delta: { function_call: { arguments: '{"path":"a"}' } }, finish_reason: 'function_call' }] },
+  ]);
+  await bridgeResponses({ input: { model: 'custom', input: 'Inspect', tools: [{ type: 'function', name: 'read_file' }] }, res,
+    router: { openCompletion: async () => ({ response, route: { name: 'Custom provider' } }) } });
+  const call = events(res).at(-1).response.output[0];
+  assert.match(call.call_id, /^call_/);
   assert.equal(call.name, 'read_file');
   assert.deepEqual(JSON.parse(call.arguments), { path: 'a' });
 });
