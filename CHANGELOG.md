@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.23
+
+- Added selectable question cards with option descriptions, custom answers, and explicit submission. Selections and input focus stay intact during streaming updates.
+- Enabled Codex questions during ordinary coding tasks and connected Claude AskUserQuestion, including multiple selections. Questions wait for your answer even with permission prompts disabled.
+- Send answers back to the running task, dismiss resolved requests, and support skipping questions or cancelling the task.
+
 ## 1.0.22
 
 - Track active runtime items so reasoning and delayed completion events cannot replace live response writing, file edits, or terminal commands.

@@ -11,6 +11,7 @@ import { createAnthropicProvider } from './anthropic-provider.mjs';
 import { createFreeRouter, FREE_PROVIDER_ID, FREE_KEY_IDS, isCodexLimitError, exhaustedCodexLimit } from './free-router.mjs';
 import { bridgeResponses, createChatProviderRouter, providerApiFormat } from './responses-bridge.mjs';
 import { browserCodexConfig } from './browser-config.mjs';
+import './public/question-protocol.js';
 
 const execFileAsync = promisify(execFile);
 const appRoot = path.dirname(fileURLToPath(import.meta.url));
@@ -341,7 +342,7 @@ class CodexAppServer {
   }
 
   async start() {
-    const child = spawn(codexExecutable, codexArgs(['app-server', '--listen', 'stdio://']), {
+    const child = spawn(codexExecutable, codexArgs(['app-server', '--listen', 'stdio://', '-c', 'features.default_mode_request_user_input=true']), {
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
       env: process.env,
@@ -403,6 +404,7 @@ class CodexAppServer {
           else pending.resolve(message.result);
         }
       } else if (message.method) {
+        if (message.method === 'serverRequest/resolved') this.serverRequests.delete(String(message.params?.requestId));
         this.emit({ type: 'notification', method: message.method, params: message.params || {} });
       }
     }
@@ -1078,6 +1080,10 @@ async function handleApi(req, res, url) {
       if (route === '/api/approval') {
         const id = input.id;
         if (String(id || '').startsWith('anthropic:')) {
+          if (input.decision === 'answer' || input.decision === 'skip') {
+            anthropic.resolveQuestion(id, input.answers, input.decision === 'skip');
+            return json(res, 200, { ok: true });
+          }
           const decision = String(input.decision || 'decline');
           if (!['accept', 'acceptForSession', 'decline', 'cancel'].includes(decision)) throw new Error('Choose a valid approval decision.');
           anthropic.resolveApproval(id, decision);
@@ -1096,7 +1102,8 @@ async function handleApi(req, res, url) {
           if (!['accept', 'decline'].includes(decision)) throw new Error('Choose Accept or Decline.');
           codex.reply(id, { permissions: decision === 'accept' ? params.permissions || {} : {}, scope: input.scope === 'session' ? 'session' : 'turn' });
         } else if (method === 'tool/requestUserInput' || method === 'item/tool/requestUserInput') {
-          codex.reply(id, { answers: input.answers || {} });
+          const answers = input.decision === 'skip' ? {} : ForgeQuestions.validate(params.questions, input.answers);
+          codex.reply(id, { answers });
         } else if (method === 'execCommandApproval' || method === 'applyPatchApproval') {
           const decision = String(input.decision || 'decline');
           if (!['accept', 'decline'].includes(decision)) throw new Error('Choose Accept or Decline.');

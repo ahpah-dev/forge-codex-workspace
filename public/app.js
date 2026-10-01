@@ -31,6 +31,9 @@ const state = {
   isBusy: false,
   pendingSend: false,
   approvals: [],
+  questionDrafts: new Map(),
+  questionSending: new Set(),
+  approvalRenderSignature: '',
   treeCache: new Map(),
   expandedDirs: new Set(),
   selectedFile: null,
@@ -2295,7 +2298,8 @@ function renderLiveProgress() {
 }
 
 function setActivityStatus(label) {
-  if (label) state.activityStatus = label;
+  if (state.approvals.some((request) => ForgeQuestions.isRequest(request.method))) state.activityStatus = 'Waiting for your answer';
+  else if (label) state.activityStatus = label;
 }
 
 function createLiveActivityTracker() {
@@ -2543,8 +2547,7 @@ function renderMessages(forceTop = false) {
     visibleMessages.unshift(earlier);
   }
   list.replaceChildren(...visibleMessages);
-  const slot = $('#approval-slot');
-  slot.replaceChildren(...state.approvals.map(renderApproval));
+  renderApprovalSlot();
   if (forceTop) requestAnimationFrame(() => { scroll.scrollTop = 0; });
   else if (wasNearBottom) requestAnimationFrame(() => { scroll.scrollTop = scroll.scrollHeight; });
 }
@@ -2707,9 +2710,12 @@ function handleCodexEvent(event) {
   }
   if (event.type === 'server-request') {
     if (state.threadId && event.params?.threadId && event.params.threadId !== state.threadId) return;
+    if (state.activeTurnId && event.params?.turnId && event.params.turnId !== state.activeTurnId) return;
     if (!state.threadId && state.pendingSend && event.params?.threadId) state.threadId = event.params.threadId;
-    setActivityStatus('Waiting for your approval');
-    state.approvals.push(event);
+    const prior = state.approvals.findIndex((request) => String(request.id) === String(event.id));
+    if (prior >= 0) state.approvals[prior] = event;
+    else state.approvals.push(event);
+    setActivityStatus(ForgeQuestions.isRequest(event.method) ? 'Waiting for your answer' : 'Waiting for your approval');
     renderSurface();
     $('#conversation-scroll').scrollTop = $('#conversation-scroll').scrollHeight;
     return;
@@ -2717,6 +2723,15 @@ function handleCodexEvent(event) {
   if (event.type !== 'notification') return;
   const params = event.params || {};
   const method = event.method;
+  if (method === 'serverRequest/resolved') {
+    if (state.threadId && params.threadId && params.threadId !== state.threadId) return;
+    if (!state.approvals.some((request) => String(request.id) === String(params.requestId))) return;
+    state.approvals = state.approvals.filter((request) => String(request.id) !== String(params.requestId));
+    state.questionDrafts.delete(String(params.requestId));
+    setActivityStatus(state.isBusy ? liveActivities.current() || 'Continuing the task' : 'Ready for your next task');
+    renderApprovalSlot();
+    return;
+  }
   if (/^item\//.test(method || '')) {
     if (state.threadId && params.threadId && params.threadId !== state.threadId) return;
     if (state.activeTurnId && params.turnId && params.turnId !== state.activeTurnId) return;
@@ -2943,6 +2958,134 @@ function handleCodexEvent(event) {
   }
 }
 
+function renderApprovalSlot() {
+  const pendingIds = new Set(state.approvals.map((request) => String(request.id)));
+  for (const id of state.questionDrafts.keys()) if (!pendingIds.has(id)) state.questionDrafts.delete(id);
+  const signature = JSON.stringify(state.approvals.map((request) => [request.id, request.method, request.params, state.questionSending.has(String(request.id))]));
+  if (signature === state.approvalRenderSignature) return;
+  state.approvalRenderSignature = signature;
+  $('#approval-slot').replaceChildren(...state.approvals.map(renderApproval));
+}
+
+function renderQuestionRequest(event, actor) {
+  const requestId = String(event.id);
+  const questions = event.params?.questions || [];
+  const drafts = state.questionDrafts.get(requestId) || Object.create(null);
+  state.questionDrafts.set(requestId, drafts);
+  const sending = state.questionSending.has(requestId);
+  const card = document.createElement('section');
+  card.className = 'approval-card question-card';
+  card.dataset.requestId = requestId;
+  card.setAttribute('aria-label', actor + ' has a question');
+  const header = document.createElement('div');
+  header.className = 'question-card-header';
+  const title = document.createElement('strong');
+  title.textContent = actor + ' has ' + (questions.length > 1 ? 'a few questions' : 'a question');
+  const hint = document.createElement('span');
+  hint.textContent = 'YOUR INPUT';
+  header.append(title, hint);
+  card.append(header);
+  questions.forEach((question, questionIndex) => {
+    const draft = drafts[question.id] || (drafts[question.id] = { selected: [], custom: '', useCustom: !question.options?.length });
+    const group = document.createElement('fieldset');
+    group.className = 'question-section';
+    group.disabled = sending;
+    const legend = document.createElement('legend');
+    legend.textContent = question.header || 'Question ' + (questionIndex + 1);
+    const prompt = document.createElement('p');
+    prompt.className = 'question-prompt';
+    prompt.textContent = question.question;
+    group.append(legend, prompt);
+    if (question.multiSelect) {
+      const instruction = document.createElement('small');
+      instruction.className = 'question-instruction';
+      instruction.textContent = 'Select all that apply';
+      group.append(instruction);
+    }
+    const choices = [];
+    const name = 'question-' + requestId + '-' + questionIndex;
+    for (const option of question.options || []) {
+      const label = document.createElement('label');
+      label.className = 'question-choice';
+      const input = document.createElement('input');
+      input.type = question.multiSelect ? 'checkbox' : 'radio';
+      input.name = name;
+      input.value = option.label;
+      input.checked = draft.selected.includes(option.label) && (question.multiSelect || !draft.useCustom);
+      const copy = document.createElement('span');
+      copy.className = 'question-option-copy';
+      const optionTitle = document.createElement('strong');
+      optionTitle.textContent = option.label;
+      copy.append(optionTitle);
+      if (option.description) {
+        const description = document.createElement('span');
+        description.textContent = option.description;
+        copy.append(description);
+      }
+      label.append(input, copy);
+      group.append(label);
+      choices.push(input);
+    }
+    let customToggle = null;
+    let custom = null;
+    if (!question.options?.length || question.isOther) {
+      if (question.options?.length) {
+        const label = document.createElement('label');
+        label.className = 'question-choice question-custom-choice';
+        customToggle = document.createElement('input');
+        customToggle.type = question.multiSelect ? 'checkbox' : 'radio';
+        customToggle.name = name;
+        customToggle.checked = draft.useCustom;
+        const caption = document.createElement('span');
+        caption.textContent = 'Something else';
+        label.append(customToggle, caption);
+        group.append(label);
+      }
+      custom = document.createElement('input');
+      custom.type = question.isSecret ? 'password' : 'text';
+      custom.className = 'question-custom-input';
+      custom.placeholder = 'Write your answer…';
+      custom.setAttribute('aria-label', 'Your answer to ' + question.question);
+      custom.autocomplete = 'off';
+      custom.value = draft.custom;
+      group.append(custom);
+    }
+    group.addEventListener('input', (inputEvent) => {
+      if (inputEvent.target === custom) {
+        if (customToggle) customToggle.checked = true;
+        if (!question.multiSelect) choices.forEach((choice) => { choice.checked = false; });
+      }
+      draft.selected = choices.filter((choice) => choice.checked).map((choice) => choice.value);
+      draft.useCustom = customToggle ? customToggle.checked : !question.options?.length;
+      draft.custom = custom?.value || '';
+      updateSubmit();
+    });
+    card.append(group);
+  });
+  const actions = document.createElement('div');
+  actions.className = 'approval-actions question-actions';
+  const skip = document.createElement('button');
+  skip.type = 'button';
+  skip.textContent = 'Skip for now';
+  skip.dataset.approvalId = requestId;
+  skip.dataset.decision = 'skip';
+  skip.disabled = sending;
+  const submit = document.createElement('button');
+  submit.type = 'button';
+  submit.className = 'question-submit';
+  submit.textContent = sending ? 'Sending…' : questions.length > 1 ? 'Send answers' : 'Send answer';
+  submit.dataset.approvalId = requestId;
+  submit.dataset.decision = 'answer';
+  function updateSubmit() {
+    try { ForgeQuestions.fromDraft(questions, drafts); submit.disabled = sending; }
+    catch { submit.disabled = true; }
+  }
+  updateSubmit();
+  actions.append(skip, submit);
+  card.append(actions);
+  return card;
+}
+
 function renderApproval(event) {
   const card = document.createElement('section');
   card.className = 'approval-card';
@@ -2951,9 +3094,10 @@ function renderApproval(event) {
   const isCommand = ['commandExecution/requestApproval', 'item/commandExecution/requestApproval', 'execCommandApproval'].includes(method);
   const isFile = ['fileChange/requestApproval', 'item/fileChange/requestApproval', 'applyPatchApproval'].includes(method);
   const isPermissions = method === 'item/permissions/requestApproval';
-  const isQuestion = method === 'tool/requestUserInput' || method === 'item/tool/requestUserInput';
+  const isQuestion = ForgeQuestions.isRequest(method);
   const isAnthropic = method === 'anthropic/tool/requestApproval';
   const actor = state.threadProviderId === 'openai' ? 'Codex' : state.threadProviderId === 'anthropic' ? 'Claude' : state.providers.find((provider) => provider.id === state.threadProviderId)?.name || 'This model';
+  if (isQuestion) return renderQuestionRequest(event, actor);
   const title = document.createElement('div');
   title.className = 'approval-topline';
   const mark = document.createElement('span');
@@ -3009,37 +3153,6 @@ function renderApproval(event) {
       pathNote.textContent = 'Requested path · ' + params.blockedPath;
       card.append(pathNote);
     }
-  } else if (isQuestion) {
-    for (const question of params.questions || []) {
-      const wrap = document.createElement('div');
-      wrap.className = 'approval-question';
-      wrap.dataset.questionId = question.id;
-      const label = document.createElement('strong');
-      label.textContent = question.question;
-      wrap.append(label);
-      if (question.options?.length) {
-        question.options.forEach((option, index) => {
-          const choice = document.createElement('label');
-          const radio = document.createElement('input');
-          radio.type = 'radio';
-          radio.name = `question-${event.id}-${question.id}`;
-          radio.value = option.label;
-          radio.checked = index === 0;
-          const optionLabel = document.createElement('span');
-          optionLabel.textContent = option.label;
-          choice.append(radio, optionLabel);
-          wrap.append(choice);
-        });
-      }
-      if (!question.options?.length || question.options.some((option) => option.label.toLowerCase() === 'other')) {
-        const other = document.createElement('input');
-        other.type = question.isSecret ? 'password' : 'text';
-        other.className = 'answer-other';
-        other.placeholder = 'Write another answer…';
-        wrap.append(other);
-      }
-      card.append(wrap);
-    }
   } else {
     const note = document.createElement('p');
     note.className = 'approval-unhandled';
@@ -3077,22 +3190,19 @@ function renderApproval(event) {
 async function answerApproval(id, decision) {
   const event = state.approvals.find((request) => String(request.id) === String(id));
   if (!event) return;
+  const isQuestion = ForgeQuestions.isRequest(event.method);
+  if (state.questionSending.has(String(id))) return;
   try {
     let body = { id, decision };
     if (decision === 'answer') {
-      const answers = {};
-      for (const question of event.params?.questions || []) {
-        const wrap = $(`.approval-question[data-question-id="${CSS.escape(question.id)}"]`);
-        const selected = wrap?.querySelector('input[type="radio"]:checked')?.value;
-        const other = wrap?.querySelector('.answer-other')?.value.trim();
-        answers[question.id] = { answers: [other || selected || ''] };
-      }
-      body = { id, answers };
+      body.answers = ForgeQuestions.fromDraft(event.params?.questions || [], state.questionDrafts.get(String(id)));
     }
+    if (isQuestion) { state.questionSending.add(String(id)); renderApprovalSlot(); }
     await api('/api/approval', { method: 'POST', body });
     state.approvals = state.approvals.filter((request) => String(request.id) !== String(id));
-    renderMessages();
+    if (isQuestion) setActivityStatus(liveActivities.current() || 'Continuing with your answer');
   } catch (error) { showToast(error.message, 'error'); }
+  finally { state.questionSending.delete(String(id)); renderMessages(); }
 }
 
 function cacheThreadHistory(threadId, result) {

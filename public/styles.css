@@ -441,6 +441,30 @@ button { -webkit-tap-highlight-color: transparent; }
 .file-status { display: inline-grid; place-items: center; width: 23px; height: 20px; flex: 0 0 auto; border-radius: 5px; color: var(--accent); background: var(--hover); font: 600 calc(9px * var(--ui-scale))/1 var(--font-code); }
 .turn-error { padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; color: var(--danger); background: var(--hover); font-size: calc(12px * var(--ui-scale)); white-space: pre-wrap; }
 .approval-slot { display: flex; flex-direction: column; gap: 12px; }
+.approval-card.question-card { padding: 20px; box-shadow: 0 6px 24px color-mix(in srgb, var(--ink) 4%, transparent); animation: question-arrive .24s ease-out; }
+.question-card-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--ink); font-size: calc(13px * var(--ui-scale)); }
+.question-card-header > span { color: var(--muted); font: 600 calc(9px * var(--ui-scale))/1.3 var(--font-ui); letter-spacing: .1em; }
+.question-section { min-width: 0; margin: 20px 0 0; padding: 0; border: 0; }
+.question-section legend { padding: 0; color: var(--accent); font-size: calc(10px * var(--ui-scale)); font-weight: 600; }
+.question-prompt { margin: 6px 0 12px; color: var(--ink); font-size: calc(14px * var(--ui-scale)); line-height: 1.55; }
+.question-instruction { display: block; margin: -5px 0 10px; color: var(--muted); font-size: calc(11px * var(--ui-scale)); }
+.question-choice { display: flex; align-items: flex-start; gap: 11px; margin: 7px 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--field); color: var(--ink); font-size: calc(12px * var(--ui-scale)); cursor: pointer; transition: border-color .16s ease, background .16s ease, box-shadow .16s ease; }
+.question-choice:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); background: var(--hover); }
+.question-choice:has(input:checked) { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 7%, var(--paper)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 12%, transparent); }
+.question-choice:focus-within { outline: 2px solid color-mix(in srgb, var(--accent) 45%, transparent); outline-offset: 2px; }
+.question-choice > input { flex: 0 0 auto; width: 15px; height: 15px; margin: 2px 0 0; accent-color: var(--accent); }
+.question-option-copy { display: grid; gap: 4px; min-width: 0; line-height: 1.45; }
+.question-option-copy strong { font-weight: 550; }
+.question-option-copy > span { color: var(--muted); font-size: calc(11px * var(--ui-scale)); }
+.question-custom-input { display: block; width: 100%; box-sizing: border-box; margin-top: 9px; padding: 11px 13px; border: 1px solid var(--line); border-radius: 9px; color: var(--ink); background: var(--field); font: inherit; font-size: calc(12px * var(--ui-scale)); }
+.question-custom-input:focus { outline: 2px solid color-mix(in srgb, var(--accent) 35%, transparent); border-color: var(--accent); }
+.question-actions { padding-top: 14px; border-top: 1px solid var(--line); }
+.question-actions .question-submit { color: var(--on-accent); border-color: var(--accent); background: var(--accent); font-weight: 600; }
+.question-actions .question-submit:hover { background: color-mix(in srgb, var(--accent) 88%, var(--ink)); }
+.question-actions button:disabled { opacity: .45; cursor: default; }
+.question-section:disabled .question-choice { cursor: default; opacity: .7; }
+@keyframes question-arrive { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: translateY(0); } }
+@media (prefers-reduced-motion: reduce) { .question-card { animation: none; } .question-choice { transition: none; } }
 .approval-card { margin: 12px 0; padding: 15px; border: 1px solid var(--line); border-radius: 13px; background: var(--paper); }
 .approval-topline { margin-bottom: 10px; color: var(--accent); font-size: calc(12px * var(--ui-scale)); font-weight: 650; }
 .approval-command { margin: 8px 0; padding: 10px; border-radius: 8px; color: var(--ink); background: var(--hover); font: calc(12px * var(--code-scale))/1.5 var(--font-code); overflow-wrap: anywhere; }

@@ -20,12 +20,19 @@ test('real Codex runtime executes adapted file tools and accepts native planning
   let upstreamCalls = 0;
   let observedTools = [];
   let phase = 'code';
+  let questionRequest = null;
+  let questionAnswerReceived = false;
   const router = { async openCompletion(request) {
     upstreamCalls++;
     observedTools = request.tools?.map((tool) => tool.function.name) || [];
     let chunks;
     if (!request.messages.some((message) => message.role === 'tool')) {
-      if (phase === 'patch') {
+      if (phase === 'question') {
+        const name = observedTools.find((tool) => /request_user_input$/.test(tool));
+        assert.ok(name, 'Coding mode must expose request_user_input');
+        const questions = [{ id: 'theme', header: 'Theme', question: 'Which theme should I use?', isOther: true, options: [{ label: 'Dark', description: 'A dark interface.' }, { label: 'Light', description: 'A light interface.' }] }];
+        chunks = [{ choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_question', function: { name, arguments: JSON.stringify({ questions }) } }] }, finish_reason: 'tool_calls' }] }];
+      } else if (phase === 'patch') {
         const name = observedTools.find((tool) => tool === 'forge_edit_file');
         assert.ok(name, `Expected forge_edit_file in ${observedTools.join(', ')}`);
         const patch = { path: 'marker.txt', old_text: 'bridge works', new_text: 'patch works' };
@@ -37,6 +44,7 @@ test('real Codex runtime executes adapted file tools and accepts native planning
       chunks = [{ choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_fixture', function: { name, arguments: JSON.stringify({ cmd, workdir: workspace, max_output_tokens: 1000 }) } }] }, finish_reason: 'tool_calls' }] }];
       }
     } else {
+      if (phase === 'question') questionAnswerReceived = request.messages.some((message) => message.role === 'tool' && String(message.content).includes('Dark'));
       chunks = [{ choices: [{ delta: { content: phase === 'plan' ? '<proposed_plan>\nInspect the project, then implement the requested change.\n</proposed_plan>' : 'The marker file was created.' }, finish_reason: 'stop' }] }];
     }
     return { response: sse(chunks), route: { provider: 'fixture', name: 'Local fixture' } };
@@ -49,7 +57,7 @@ test('real Codex runtime executes adapted file tools and accepts native planning
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const baseUrl = `http://127.0.0.1:${server.address().port}`;
-  const child = spawn(process.execPath, [cli, 'app-server', '--listen', 'stdio://'], { env: { ...process.env, CODEX_HOME: profile }, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, [cli, 'app-server', '--listen', 'stdio://', '-c', 'features.default_mode_request_user_input=true'], { env: { ...process.env, CODEX_HOME: profile }, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
   let buffer = '', diagnostic = '';
   let nextId = 1;
   const pending = new Map();
@@ -64,7 +72,12 @@ test('real Codex runtime executes adapted file tools and accepts native planning
       if (!text.trim()) continue;
       const message = JSON.parse(text);
       if (message.method && message.id != null) {
-        child.stdin.write(JSON.stringify({ id: message.id, result: { decision: phase === 'plan' ? 'decline' : 'accept' } }) + '\n');
+        let result = { decision: phase === 'plan' ? 'decline' : 'accept' };
+        if (['tool/requestUserInput', 'item/tool/requestUserInput'].includes(message.method)) {
+          questionRequest = message.params;
+          result = { answers: { theme: { answers: ['Dark'] } } };
+        }
+        child.stdin.write(JSON.stringify({ id: message.id, result }) + '\n');
       } else if (message.id != null) {
         const request = pending.get(message.id); pending.delete(message.id);
         message.error ? request?.reject(new Error(message.error.message)) : request?.resolve(message.result);
@@ -95,6 +108,13 @@ test('real Codex runtime executes adapted file tools and accepts native planning
     const codeResult = await complete(coding.thread.id);
     assert.equal(codeResult.params.turn.status, 'completed', JSON.stringify(codeResult.params.turn.error));
     assert.equal((await readFile(path.join(workspace, 'marker.txt'), 'utf8')).trim(), 'bridge works');
+    phase = 'question';
+    const asking = await rpc('thread/start', { cwd: workspace, model: 'auto-free', modelProvider: 'forge_fixture', sandbox: 'read-only', approvalPolicy: 'never', config });
+    await rpc('turn/start', { threadId: asking.thread.id, input: [{ type: 'text', text: 'Ask which theme to use.' }], collaborationMode: { mode: 'default', settings: { model: 'auto-free', reasoning_effort: 'medium', developer_instructions: null } } });
+    const questionResult = await complete(asking.thread.id);
+    assert.equal(questionResult.params.turn.status, 'completed', JSON.stringify(questionResult.params.turn.error));
+    assert.equal(questionRequest?.questions[0].id, 'theme');
+    assert.equal(questionAnswerReceived, true, 'The selected answer must reach the next inference request');
     phase = 'patch';
     const patching = await rpc('thread/start', { cwd: workspace, model: 'auto-free', modelProvider: 'forge_fixture', sandbox: 'workspace-write', approvalPolicy: 'on-request', config });
     await rpc('turn/start', { threadId: patching.thread.id, input: [{ type: 'text', text: 'Edit marker.txt and create created.txt using apply_patch.' }], sandboxPolicy: { type: 'workspaceWrite', writableRoots: [workspace], networkAccess: false } });

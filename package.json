@@ -1,6 +1,6 @@
 {
   "name": "forge-codex-workspace",
-  "version": "1.0.22",
+  "version": "1.0.23",
   "license": "MIT",
   "description": "Forge desktop AI workspace for Codex, Claude Code, and external APIs",
   "author": "Forge",

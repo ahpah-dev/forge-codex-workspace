@@ -6,6 +6,7 @@ import { promisify } from 'node:util';
 import { deleteSession, forkSession, getSessionMessages, query } from '@anthropic-ai/claude-agent-sdk';
 import { fileURLToPath } from 'node:url';
 import { browserMcpConfig } from './browser-config.mjs';
+import './public/question-protocol.js';
 
 const execFileAsync = promisify(execFile);
 const THREAD_PREFIX = 'anthropic:';
@@ -323,6 +324,7 @@ export function createAnthropicProvider({ dataRoot, publish, executable = 'claud
   function resolveApproval(requestId, decision) {
     const pending = pendingApprovals.get(String(requestId));
     if (!pending) throw new Error('That Claude permission request has already completed.');
+    if (pending.questions) throw new Error('Answer Claude’s questions before continuing.');
     pendingApprovals.delete(String(requestId));
     if (decision === 'accept' || decision === 'acceptForSession') {
       const result = { behavior: 'allow', updatedInput: pending.input, toolUseID: pending.toolUseID };
@@ -333,28 +335,47 @@ export function createAnthropicProvider({ dataRoot, publish, executable = 'claud
     }
   }
 
+  function resolveQuestion(requestId, answers, skip = false) {
+    const pending = pendingApprovals.get(String(requestId));
+    if (!pending?.questions) throw new Error('That Claude question has already completed.');
+    const result = skip
+      ? { behavior: 'deny', message: 'The user skipped these questions. Continue with reasonable assumptions where possible.' }
+      : { behavior: 'allow', updatedInput: ForgeQuestions.claudeInput(pending.input, pending.questions, answers), toolUseID: pending.toolUseID };
+    pendingApprovals.delete(String(requestId));
+    pending.resolve(result);
+  }
+
   async function requestPermission(session, turnId, toolName, input, options) {
     if (options.signal?.aborted) return { behavior: 'deny', message: 'The task was stopped.' };
-    if (session.askBeforeExternalActions === false) return { behavior: 'allow', updatedInput: input, toolUseID: input?.tool_use_id };
+    const isQuestion = toolName === 'AskUserQuestion';
+    if (!isQuestion && session.askBeforeExternalActions === false) return { behavior: 'allow', updatedInput: input, toolUseID: input?.tool_use_id };
+    const questions = isQuestion ? ForgeQuestions.normalizeClaude(input) : null;
     const requestId = randomUUID();
     const id = 'anthropic:' + requestId;
     const details = {
       threadId: session.id,
+      turnId,
       toolName: String(toolName),
       input,
       title: String(options.title || describeTool(toolName, input)),
       blockedPath: options.blockedPath || null,
       suggestions: options.suggestions || [],
+      ...(isQuestion ? { questions } : {}),
     };
     return new Promise((resolve) => {
-      const pending = { resolve, threadId: session.id, input, suggestions: options.suggestions || [], toolUseID: input?.tool_use_id };
+      const finish = (result) => {
+        options.signal?.removeEventListener('abort', onAbort);
+        send('serverRequest/resolved', { threadId: session.id, requestId: id });
+        resolve(result);
+      };
+      const pending = { resolve: finish, threadId: session.id, input, questions, suggestions: options.suggestions || [], toolUseID: options.toolUseID || input?.tool_use_id };
       pendingApprovals.set(id, pending);
       const onAbort = () => {
         if (!pendingApprovals.delete(id)) return;
-        resolve({ behavior: 'deny', message: 'The task was stopped.' });
+        finish({ behavior: 'deny', message: 'The task was stopped.' });
       };
       options.signal?.addEventListener('abort', onAbort, { once: true });
-      publish({ type: 'server-request', id, method: 'anthropic/tool/requestApproval', params: details });
+      publish({ type: 'server-request', id, method: isQuestion ? 'anthropic/tool/requestUserInput' : 'anthropic/tool/requestApproval', params: details });
     });
   }
 
@@ -639,5 +660,5 @@ export function createAnthropicProvider({ dataRoot, publish, executable = 'claud
     }
   }
 
-  return { getStatus, listThreads, readThreadHistory, forkBeforeMessage, deleteThread, startTurn, interrupt, resolveApproval, owns };
+  return { getStatus, listThreads, readThreadHistory, forkBeforeMessage, deleteThread, startTurn, interrupt, resolveApproval, resolveQuestion, owns };
 }
