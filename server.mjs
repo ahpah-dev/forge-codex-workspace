@@ -402,9 +402,15 @@ async function setWorkspace(candidate) {
 async function resolveWorkspacePath(relativePath = '') {
   if (!activeWorkspace) throw new Error('Open a workspace folder first.');
   const absolute = path.resolve(activeWorkspace, String(relativePath || ''));
-  if (!pathIsInside(activeWorkspace, absolute)) throw new Error('That path is outside the open workspace.');
+  if (!pathIsInside(activeWorkspace, absolute)) {
+    const requestedPath = absolute.replace(/[\u0000-\u001f\u007f]/g, '�');
+    throw new Error(`Path “${requestedPath}” is outside open workspace “${activeWorkspace}”. Open the folder containing that path and try again.`);
+  }
   const canonical = await realpath(absolute);
-  if (!pathIsInside(activeWorkspace, canonical)) throw new Error('That path resolves outside the open workspace.');
+  if (!pathIsInside(activeWorkspace, canonical)) {
+    const resolvedPath = canonical.replace(/[\u0000-\u001f\u007f]/g, '�');
+    throw new Error(`Path “${resolvedPath}” resolves outside open workspace “${activeWorkspace}”. Open the folder containing that path and try again.`);
+  }
   return canonical;
 }
 

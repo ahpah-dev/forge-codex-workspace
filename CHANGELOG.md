@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.31
+
+- Fixed cached chat switching to resynchronize the server’s active workspace before file actions run, preventing valid project files from being rejected against a different chat’s folder.
+- Made workspace boundary errors show the requested path and active workspace to make future path mismatches clear.
+
 ## 1.0.30
 
 - Prevented custom providers from exposing text-form pseudo tool calls as assistant output; Forge reports a clear provider compatibility error and never executes unstructured tool text.

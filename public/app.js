@@ -3483,14 +3483,6 @@ function applyThreadResult(result, { keepScroll = false } = {}) {
   if (state.workspace) void loadTree('');
 }
 
-async function refreshThreadInBackground(threadId, version) {
-  try {
-    const result = await api('/api/threads/open', { method: 'POST', body: { threadId } });
-    cacheThreadHistory(threadId, result);
-    if (state.threadOpenVersion === version && state.threadId === threadId && !state.isBusy && !state.pendingSend) applyThreadResult(result, { keepScroll: true });
-  } catch { /* Keep the cached conversation visible when background refresh is unavailable. */ }
-}
-
 async function openThread(threadId) {
   if (state.isBusy) { showToast('Stop the active task before switching sessions.'); return; }
   if (threadId === state.threadId && !state.threadLoading) return;
@@ -3514,9 +3506,8 @@ async function openThread(threadId) {
   if (cached) {
     state.threadHistoryCache.delete(threadId);
     state.threadHistoryCache.set(threadId, cached);
-    applyThreadResult(cached.result);
-    if (Date.now() - cached.cachedAt > 15000) void refreshThreadInBackground(threadId, version);
-    return;
+    // Reopen on the server even when the UI has cached history: the server also
+    // owns activeWorkspace, which must follow this thread before file actions run.
   }
 
   try {
