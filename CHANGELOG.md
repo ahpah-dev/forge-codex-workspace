@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.22
+
+- Track active runtime items so reasoning and delayed completion events cannot replace live response writing, file edits, or terminal commands.
+- Handle streamed plans, reasoning notifications, browser tool progress, and file output. Ignore activity from other chats and previous turns, and reset tracking between tasks.
+- Distinguish file writes, edits, and removals; use a neutral thinking label only while reasoning is the current observed activity.
+
 ## 1.0.21
 
 - Made live completion updates describe the actual command, file change, search, browser operation, tool call, or delegated agent task, including useful targets and command exit codes.

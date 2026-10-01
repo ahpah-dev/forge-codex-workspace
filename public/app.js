@@ -56,6 +56,8 @@ const state = {
   preferredAccess: localStorage.getItem('forge.access') || 'write',
 };
 
+const liveActivities = createLiveActivityTracker();
+
 const escapeHTML = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 
 function createSvgIcon(viewBox, className) {
@@ -2296,6 +2298,53 @@ function setActivityStatus(label) {
   if (label) state.activityStatus = label;
 }
 
+function createLiveActivityTracker() {
+  const items = new Map();
+  const finished = new Set();
+  let sequence = 0;
+  let lastConcrete = 0;
+  let displayedKey = null;
+  const keyFor = (item) => item?.id || item?.type || 'activity';
+  const isReasoning = (item) => ['reasoning', 'reasoningSummary'].includes(item?.type);
+  function current() {
+    const active = [...items.values()].filter((entry) => entry.observed);
+    // A reasoning item can span an entire inference. Its lifecycle alone does
+    // not establish that the model is still thinking while output is arriving.
+    const concrete = active.filter((entry) => !isReasoning(entry.item));
+    const candidates = concrete.length ? concrete : active.filter((entry) => entry.sequence > lastConcrete);
+    const latest = candidates.sort((a, b) => b.sequence - a.sequence)[0];
+    if (latest) displayedKey = latest.key;
+    return latest?.label || null;
+  }
+  function update(item, label, streaming = false) {
+    const key = keyFor(item);
+    if (finished.has(key)) return current();
+    const previous = items.get(key);
+    const observed = streaming || item?.type !== 'agentMessage' || previous?.observed || false;
+    const entry = { key, item: { ...previous?.item, ...item }, label, observed, sequence: ++sequence };
+    items.set(key, entry);
+    if (observed && !isReasoning(entry.item)) lastConcrete = sequence;
+    return current();
+  }
+  return {
+    start: (item, label) => update(item, label),
+    progress: (item, label) => update(item, label, true),
+    complete(item, fallback) {
+      const key = keyFor(item);
+      const wasDisplayed = displayedKey === key;
+      items.delete(key);
+      finished.add(key);
+      const running = current();
+      if (running) return running;
+      // Delayed completions must not replace a newer operation's status.
+      if (displayedKey && !wasDisplayed) return null;
+      return isReasoning(item) ? 'Waiting for the next model activity' : fallback;
+    },
+    current,
+    reset() { items.clear(); finished.clear(); sequence = 0; lastConcrete = 0; displayedKey = null; },
+  };
+}
+
 function activityText(value, maximum = 74) {
   const text = String(value || '').replace(/\s+/g, ' ').trim();
   return text.length > maximum ? text.slice(0, maximum - 1) + '…' : text;
@@ -2309,8 +2358,11 @@ function activityStatusForItem(item) {
       return command ? 'Running ' + activityText(command, 82) : 'Running a terminal command';
     }
     case 'fileChange': {
-      const files = (item.changes || []).map((change) => change.path || change.filePath || change.displayPath).filter(Boolean);
-      return files.length ? 'Editing ' + activityText(files.join(', '), 78) : 'Applying file changes';
+      const changes = item.changes || [];
+      const files = changes.map((change) => change.path || change.filePath || change.displayPath).filter(Boolean);
+      const kinds = changes.map((change) => String(typeof change.kind === 'string' ? change.kind : change.kind?.type || change.type || '').toLowerCase());
+      const verb = kinds.length && kinds.every((kind) => /^(add|added|create|created|write)$/.test(kind)) ? 'Writing' : kinds.length && kinds.every((kind) => /^(delete|deleted|remove)$/.test(kind)) ? 'Removing' : 'Editing';
+      return files.length ? verb + ' ' + activityText(files.join(', '), 78) : 'Preparing file changes';
     }
     case 'webSearch': return item.query ? 'Searching the web for ' + activityText(item.query, 62) : 'Searching the web';
     case 'mcpToolCall': return browserActivityLabel(item.tool, item.arguments || {});
@@ -2326,8 +2378,10 @@ function activityStatusForItem(item) {
     case 'sub_agent_activity': return 'Agent · ' + activityText(item.kind || 'working');
     case 'agentMessage': return 'Writing the response';
     case 'reasoning':
-    case 'reasoningSummary': return 'Reviewing the task context';
-    default: return 'Inspecting the project';
+    case 'reasoningSummary': return 'Thinking';
+    case 'plan': return 'Writing the task plan';
+    case 'dynamicToolCall': return 'Using ' + (item.tool || item.toolName || 'a workspace tool');
+    default: return item?.type ? 'Processing ' + activityText(String(item.type).replace(/([a-z])([A-Z])/g, '$1 $2').replaceAll('_', ' '), 68) : 'Waiting for model activity';
   }
 }
 
@@ -2445,7 +2499,7 @@ function completedActivityStatus(item) {
       break;
     }
     case 'reasoning':
-    case 'reasoningSummary': action = 'Finished reviewing the task context'; break;
+    case 'reasoningSummary': action = 'Waiting for the next model activity'; break;
     case 'plan': action = 'Updated the task plan'; break;
     default: {
       const detail = item?.summary || item?.title || item?.name || item?.toolName || item?.tool || item?.kind;
@@ -2663,6 +2717,10 @@ function handleCodexEvent(event) {
   if (event.type !== 'notification') return;
   const params = event.params || {};
   const method = event.method;
+  if (/^item\//.test(method || '')) {
+    if (state.threadId && params.threadId && params.threadId !== state.threadId) return;
+    if (state.activeTurnId && params.turnId && params.turnId !== state.activeTurnId) return;
+  }
   if (method === 'routing/model/selected') {
     state.freeRouting.lastRoute = params.route;
     if (state.threadProviderId === 'forge-free') {
@@ -2691,6 +2749,7 @@ function handleCodexEvent(event) {
     state.threadId = params.newThreadId;
     state.threadProviderId = 'forge-free';
     state.activeTurnId = null;
+    liveActivities.reset();
     state.approvals = [];
     selectFreeRouteModel();
     state.messages.push({ role: 'routing', text: 'Continued in a Free Auto Route session with the previous conversation and completed work as context.' });
@@ -2735,7 +2794,7 @@ function handleCodexEvent(event) {
   }
   if (method === 'activity/status') {
     if (state.threadId && params.threadId !== state.threadId) return;
-    setActivityStatus(params.status);
+    setActivityStatus(liveActivities.current() || params.status);
     renderSurface();
     return;
   }
@@ -2754,7 +2813,7 @@ function handleCodexEvent(event) {
     const planText = params.explanation || (params.plan || []).map((step) => `${step.status === 'completed' ? '✓' : '○'} ${step.step}`).join('\n');
     if (planText) {
       const activeStep = (params.plan || []).find((step) => !/completed|done/i.test(String(step.status || '')));
-      setActivityStatus(activeStep?.step ? 'Working on · ' + activityText(activeStep.step, 82) : 'Updating the task plan');
+      setActivityStatus(liveActivities.current() || (activeStep?.step ? 'Working on · ' + activityText(activeStep.step, 82) : 'Updated the task plan'));
       const existing = state.messages.find((message) => message.role === 'plan' && message.turnId === params.turnId);
       if (existing) existing.text = planText;
       else state.messages.push({ id: `plan-${params.turnId}`, turnId: params.turnId, role: 'plan', text: planText });
@@ -2763,23 +2822,46 @@ function handleCodexEvent(event) {
     return;
   }
   if (method === 'item/agentMessage/delta') {
-    setActivityStatus('Writing a response');
+    if (params.delta) setActivityStatus(liveActivities.progress({ id: params.itemId, type: 'agentMessage' }, 'Writing the response'));
     addOrUpdateAssistant(params, params.delta || '');
+    return;
+  }
+  if (method === 'item/plan/delta') {
+    if (params.delta) setActivityStatus(liveActivities.progress({ id: params.itemId, type: 'plan' }, 'Writing the task plan'));
+    renderSurface();
+    return;
+  }
+  if (['item/reasoning/summaryTextDelta', 'item/reasoning/textDelta', 'item/reasoning/summaryPartAdded'].includes(method)) {
+    setActivityStatus(liveActivities.progress({ id: params.itemId, type: 'reasoning' }, 'Thinking'));
+    renderSurface();
+    return;
+  }
+  if (method === 'item/mcpToolCall/progress') {
+    if (params.message) setActivityStatus(liveActivities.progress({ id: params.itemId, type: 'mcpToolCall' }, activityText(params.message, 90)));
+    renderSurface();
+    return;
+  }
+  if (method === 'item/fileChange/outputDelta') {
+    const activity = state.messages.find((message) => message.role === 'activity' && message.id === params.itemId);
+    const item = { id: params.itemId, type: 'fileChange', changes: activity?.changes || [] };
+    setActivityStatus(liveActivities.progress(item, activityStatusForItem(item)));
+    renderSurface();
     return;
   }
   if (method === 'item/fileChange/patchUpdated') {
     if (state.threadId && params.threadId !== state.threadId) return;
     const existing = state.messages.find((message) => message.role === 'activity' && message.id === params.itemId);
     upsertActivity({ id: params.itemId, type: 'fileChange', changes: params.changes || [], status: existing?.status || 'inProgress' }, params.turnId);
-    setActivityStatus(activityStatusForItem({ type: 'fileChange', changes: params.changes || [] }));
+    const item = { id: params.itemId, type: 'fileChange', changes: params.changes?.length ? params.changes : existing?.changes || [] };
+    setActivityStatus(liveActivities.progress(item, activityStatusForItem(item)));
     scheduleLiveCodeRender();
     return;
   }
-  if (method === 'item/commandExecution/outputDelta' || method === 'commandExecution/outputDelta' || method === 'commandExecution/terminalInteraction') {
+  if (['item/commandExecution/outputDelta', 'commandExecution/outputDelta', 'commandExecution/terminalInteraction', 'item/commandExecution/terminalInteraction'].includes(method)) {
     if (state.threadId && params.threadId !== state.threadId) return;
     let activity = state.messages.find((message) => message.role === 'activity' && message.id === params.itemId);
     const command = params.command || activity?.command || '';
-    setActivityStatus(command ? 'Running ' + activityText(Array.isArray(command) ? command.join(' ') : command, 82) : 'Reading command output');
+    setActivityStatus(liveActivities.progress({ id: params.itemId, type: 'commandExecution', command }, command ? 'Running ' + activityText(Array.isArray(command) ? command.join(' ') : command, 82) : 'Reading command output'));
     if (!activity) { activity = { id: params.itemId, role: 'activity', activityType: 'command', command: params.command || '', output: '', status: 'inProgress' }; state.messages.push(activity); }
     activity.output = `${activity.output || ''}${params.delta || params.text || ''}`;
     renderSurface();
@@ -2787,7 +2869,7 @@ function handleCodexEvent(event) {
   }
   if (method === 'item/started') {
     if (state.threadId && params.threadId !== state.threadId) return;
-    setActivityStatus(activityStatusForItem(params.item));
+    setActivityStatus(liveActivities.start(params.item, activityStatusForItem(params.item)));
     if (['commandExecution', 'fileChange', 'anthropicTool', 'mcpToolCall'].includes(params.item?.type)) upsertActivity(params.item, params.turnId);
     upsertAgentItem(params.item, params.turnId);
     if (params.item?.type === 'agentMessage') {
@@ -2804,7 +2886,7 @@ function handleCodexEvent(event) {
   if (method === 'item/completed') {
     if (state.threadId && params.threadId !== state.threadId) return;
     const item = params.item || {};
-    setActivityStatus(completedActivityStatus(item));
+    setActivityStatus(liveActivities.complete(item, completedActivityStatus(item)));
     if (item.type === 'agentMessage') {
       let message = state.messages.find((candidate) => candidate.role === 'assistant' && candidate.turnId === params.turnId && candidate.id === item.id);
       if (!message) { message = { id: item.id, turnId: params.turnId, role: 'assistant', text: '' }; state.messages.push(message); }
@@ -2818,10 +2900,12 @@ function handleCodexEvent(event) {
   if (method === 'turn/started') {
     if (!state.threadId && state.pendingSend) state.threadId = params.threadId;
     if (state.threadId && params.threadId !== state.threadId) return;
-    state.activeTurnId = params.turn?.id || params.turnId || state.activeTurnId;
+    const nextTurnId = params.turn?.id || params.turnId || state.activeTurnId;
+    if (nextTurnId !== state.activeTurnId) liveActivities.reset();
+    state.activeTurnId = nextTurnId;
     state.turnStartedAt ??= Date.now();
     const latestPrompt = [...state.messages].reverse().find((message) => message.role === 'user')?.text;
-    setActivityStatus(latestPrompt ? 'Starting · ' + activityText(latestPrompt, 76) : 'Inspecting the project');
+    setActivityStatus(latestPrompt ? 'Starting · ' + activityText(latestPrompt, 76) : 'Waiting for model activity');
     state.isBusy = true;
     renderSurface();
     return;
@@ -2834,6 +2918,7 @@ function handleCodexEvent(event) {
     state.pendingSend = false;
     state.activeTurnId = null;
     state.turnStartedAt = null;
+    liveActivities.reset();
     state.activityStatus = 'Ready for your next task';
     state.approvals = state.approvals.filter((request) => request.params?.threadId !== state.threadId);
     for (const message of state.messages) if (message.role === 'assistant' && message.turnId === params.turn?.id) message.pending = false;
@@ -3035,6 +3120,7 @@ function captureThreadView() {
 }
 
 function applyThreadResult(result, { keepScroll = false } = {}) {
+  liveActivities.reset();
   const previousPath = state.workspace?.path || '';
   const nextWorkspace = result.workspace || state.workspace;
   const nextPath = nextWorkspace?.path || '';
@@ -3202,6 +3288,7 @@ async function sendMessage(textOverride, { readOnlyOverride, routingText, replac
   state.pendingSend = true;
   state.isBusy = true;
   state.turnStartedAt = Date.now();
+  liveActivities.reset();
   state.activityStatus = automaticRoute ? `Auto · ${selectedModel.name} · ${automaticRoute.reason}` : 'Starting task';
   const userMessage = { id: `user-${Date.now()}`, role: 'user', text, images: selectedImages, threadId: state.threadId };
   state.messages.push(userMessage);
