@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.27
+
+- Fixed welcome suggestion cards falling behind the composer after resizing or entering full screen by recalculating their position from live layout geometry.
+
 ## 1.0.26
 
 - Added plugin setup panels with connected-app callable status, connection links, enablement, and MCP OAuth login.

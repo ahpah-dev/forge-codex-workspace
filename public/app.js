@@ -4142,11 +4142,14 @@ function movePluginMentionSelection(delta) {
 }
 
 function positionWelcomeSuggestions() {
-  if ($('.workspace-surface').classList.contains('has-conversation')) return;
+  const surface = $('.workspace-surface');
+  if (surface.classList.contains('has-conversation')) return;
   const dock = $('#composer-dock');
-  const bottom = dock.offsetTop + dock.offsetHeight;
-  $('.idea-divider').style.top = `${bottom + 12}px`;
-  $('.idea-grid').style.top = `${bottom + 38}px`;
+  const surfaceRect = surface.getBoundingClientRect();
+  const dockRect = dock.getBoundingClientRect();
+  const dockBottom = dockRect.bottom - surfaceRect.top;
+  $('.idea-divider').style.top = `${Math.ceil(dockBottom + 12)}px`;
+  $('.idea-grid').style.top = `${Math.ceil(dockBottom + 38)}px`;
 }
 
 function setContextTab(tab, { toggle = false } = {}) {
@@ -4336,7 +4339,11 @@ composerGrip.addEventListener('keydown', (event) => {
     window.ForgeTheme.setComposerHeight(height + (event.key === 'ArrowUp' ? 12 : -12));
   }
 });
-new ResizeObserver(positionWelcomeSuggestions).observe($('#composer-dock'));
+const welcomeSuggestionResizeObserver = new ResizeObserver(() => requestAnimationFrame(positionWelcomeSuggestions));
+welcomeSuggestionResizeObserver.observe($('#composer-dock'));
+window.addEventListener('resize', () => requestAnimationFrame(positionWelcomeSuggestions));
+document.addEventListener('fullscreenchange', () => requestAnimationFrame(positionWelcomeSuggestions));
+positionWelcomeSuggestions();
 resizeComposer();
 $('#prompt-input').addEventListener('paste', (event) => {
   const images = [...(event.clipboardData?.items || [])]
