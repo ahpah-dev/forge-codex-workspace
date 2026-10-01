@@ -11,6 +11,11 @@
 @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}*,*::before,*::after{transition:none!important;animation:none!important}.js .reveal{opacity:1;transform:none}}
 
 /* Close-up of the actual model picker rather than a tiny full-window image. */
+.faq details.faq-animated { overflow: hidden; }
+.faq summary { transition: color .2s ease; }
+.faq summary:hover { color: var(--clay); }
+.faq details[data-expanded="false"] summary > span { transform: rotate(0); }
+.faq details[data-expanded="true"] summary > span { transform: rotate(45deg); }
 .detail-shot-window { position: relative; height: 375px; overflow: hidden; border: 1px solid #d4d8c8; border-radius: 7px; background: #fafaf8; }
 .detail-shot .detail-shot-window img { position: absolute; left: 50%; top: 0; width: 1200px; max-width: none; height: auto; transform: translate(-440px, -95px); border: 0; border-radius: 0; box-shadow: none; }
 .feature-card>p, .workflow-copy>p, .intro-grid p, .faq details p { color: #68715e; }
