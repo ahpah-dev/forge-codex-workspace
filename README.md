@@ -24,7 +24,7 @@ File edits appear in expandable code cards with line numbers and additions/remov
 
 Download the latest Windows x64 installer from [GitHub Releases](https://github.com/davidegeric-cloud/forge-codex-workspace/releases/latest). Run the installer, then launch Forge from the Start menu or desktop shortcut. Sign in to Codex once in the Codex app or Codex CLI; Forge uses that saved local account automatically.
 
-To build the installer yourself, use Node.js 18 or newer on Windows x64, run `npm install`, then `npm run dist:win`. The installer is written to `release/Forge-Setup-1.0.24-x64.exe`. The desktop app bundles its Codex runtime and does not need a global Node.js install.
+To build the installer yourself, use Node.js 18 or newer on Windows x64, run `npm install`, then `npm run dist:win`. The installer is written to `release/Forge-Setup-1.0.26-x64.exe`. The desktop app bundles its Codex runtime and does not need a global Node.js install.
 
 ## Start from source
 
@@ -51,7 +51,9 @@ Use **Manage providers** to add OpenRouter, NVIDIA NIM, or another service that 
 
 **Plan mode:** Choose **Plan** beside the composer mode selector to ask for a read-only investigation and implementation plan. Switch back to **Code** to make changes.
 
-**Codex plugins:** Open **Plugins** in the toolbar to search the Codex directory, install or remove plugins, switch installed plugins on or off, and add or refresh marketplace sources. Forge uses the same signed-in Codex profile and marketplace configuration as the Codex app or CLI. Type `@` in a Codex prompt to mention an enabled plugin. Start a new Forge session after installing a plugin or changing its enabled state so Codex can load the updated setup.
+**Codex plugins:** Open **Plugins** to search the directory, manage installed plugins, and refresh marketplace sources. Choose **Setup** on an installed plugin to see its skills, MCP servers, and account connections. Vercel and other connected apps show their actual callable state; connect missing accounts or enable disabled connections from the panel, then refresh. Forge includes a plugin's connected app mentions when you use `@plugin`, and supports plugin forms and URL sign-in requests during tasks. These plugins work with Codex and its external API providers; Claude uses its separate runtime. Start a new session after installing or enabling a plugin. Capabilities that require the original Codex desktop host, including special verification flows, still need that host.
+
+**In-app browser:** The Windows desktop browser opens alongside chat, with a draggable panel edge, an expand button, and live action feedback. Returning to chat leaves its page and tools running. Computer-use actions use native clicks, typing, and incremental pointer/scroll input; screenshots match the viewport coordinates. Forge's browser configuration adds its MCP server without replacing your other configured servers.
 
 ## Workspace and appearance
 
@@ -75,7 +77,7 @@ Assistant Markdown renders local workspace file links as compact clickable chips
 
 ## Browser verification
 
-Forge bundles Chromium and Playwright browser tools. Agents can open local preview URLs, click, type, drag, take screenshots, and inspect console or network errors. Browser tools are enabled automatically for Codex, Claude, and compatible external models, including resumed sessions. They use isolated browser profiles. Ask the agent to verify a specific interaction and report the observed result.
+The Windows desktop app includes a visible in-app browser. Codex and Claude computer-use tools control that same browser, so you can watch pages open and see screenshots, clicks, typing, and scrolling in Forge. Browser sessions use a persistent Forge browser profile. The browser-based version uses its bundled isolated Chromium browser.
 
 For source builds, run `npm run browser:install` to install the pinned browser runtime. Windows packaging runs this step automatically.
 

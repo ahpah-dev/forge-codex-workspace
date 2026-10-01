@@ -1,13 +1,22 @@
-const { app, BrowserWindow, dialog, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, WebContentsView, dialog, ipcMain, shell } = require('electron');
 const { fork, spawn } = require('node:child_process');
 const path = require('node:path');
 const { existsSync } = require('node:fs');
 
 const appId = 'com.forge.codexworkspace';
 app.setAppUserModelId(appId);
+if (process.env.FORGE_USER_DATA_DIR) app.setPath('userData', path.resolve(process.env.FORGE_USER_DATA_DIR));
 
 let serverProcess;
 let mainWindow;
+let browserView;
+let browserAttached = false;
+let browserVisible = false;
+let browserState = { url: '', title: '', loading: false, canGoBack: false, canGoForward: false, error: '' };
+const browserLayoutWaiters = new Set();
+let browserCommandQueue = Promise.resolve();
+let browserPointer = { x: 20, y: 20 };
+let browserActivityTimer;
 let stopping = false;
 let readyTimer;
 
@@ -46,6 +55,36 @@ ipcMain.handle('forge:connect-anthropic', async () => {
   });
 });
 
+ipcMain.handle('forge:browser-command', async (_event, { action, params } = {}) => runBrowserCommand(action, params || {}));
+ipcMain.handle('forge:browser-open-external', async () => {
+  const url = browserView?.webContents.getURL() || '';
+  if (!isBrowserUrl(url)) throw new Error('There is no web page to open yet.');
+  await shell.openExternal(url);
+  return { ok: true };
+});
+ipcMain.on('forge:browser-layout', (event, layout) => {
+  if (event.sender !== mainWindow?.webContents || !browserView || !layout || typeof layout !== 'object') return;
+  const active = layout.active === true;
+  const left = Math.max(0, Math.round(Number(layout.x) || 0));
+  const top = Math.max(0, Math.round(Number(layout.y) || 0));
+  const width = Math.max(0, Math.round(Number(layout.width) || 0));
+  const height = Math.max(0, Math.round(Number(layout.height) || 0));
+  if (active && width > 0 && height > 0) {
+    if (!browserAttached) {
+      mainWindow.contentView.addChildView(browserView);
+      browserAttached = true;
+    }
+    browserView.setBounds({ x: left, y: top, width, height });
+    browserView.setVisible(true);
+    browserVisible = true;
+    for (const resolve of browserLayoutWaiters) resolve();
+    browserLayoutWaiters.clear();
+  } else {
+    browserView.setVisible(false);
+    browserVisible = false;
+  }
+});
+
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
   app.on('second-instance', () => {
@@ -76,6 +115,7 @@ async function startForge() {
       ELECTRON_RUN_AS_NODE: '1',
       FORGE_DATA_DIR: dataRoot,
       FORGE_NO_BROWSER: '1',
+      FORGE_IN_APP_BROWSER: '1',
       CODEX_CLI: codexExecutable,
       CLAUDE_CLI: claudeExecutable,
     },
@@ -88,6 +128,13 @@ async function startForge() {
   readyTimer = setTimeout(() => showStartupError('Forge took too long to start. Close the app and try again.'), 45000);
   serverProcess.stdout.setEncoding('utf8');
   serverProcess.stderr.setEncoding('utf8');
+  serverProcess.on('message', (message) => {
+    if (message?.type !== 'forge:computer-use' || !message.id) return;
+    runBrowserCommand(message.action, message.params || {}).then(
+      (result) => serverProcess?.send({ type: 'forge:computer-use-result', id: message.id, result }),
+      (error) => serverProcess?.send({ type: 'forge:computer-use-result', id: message.id, error: error.message || 'The in-app browser action failed.' }),
+    );
+  });
   serverProcess.stdout.on('data', (chunk) => {
     output += chunk;
     const match = output.match(/Forge is ready at (http:\/\/127\.0\.0\.1:\d+)/);
@@ -151,8 +198,314 @@ function createMainWindow(url) {
   mainWindow.loadURL(url);
   mainWindow.on('closed', () => {
     mainWindow = null;
+    browserView?.webContents.close();
+    browserView = null;
+    browserAttached = false;
+    browserVisible = false;
     if (!stopping) stopForge();
   });
+}
+
+function createBrowserView() {
+  browserView = new WebContentsView({
+    webPreferences: {
+      partition: 'persist:forge-in-app-browser',
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
+      backgroundThrottling: false,
+    },
+  });
+  browserView.setVisible(false);
+  browserView.setBackgroundColor('#fafaf8');
+  browserView.setBorderRadius(7);
+  browserView.webContents.setWindowOpenHandler(({ url }) => {
+    void runBrowserCommand('navigate', { url }).catch(() => {});
+    return { action: 'deny' };
+  });
+  browserView.webContents.on('will-navigate', (event, url) => {
+    if (!isBrowserUrl(url)) event.preventDefault();
+  });
+  const update = (patch = {}) => {
+    browserState = { ...browserState, ...patch, url: browserView?.webContents.getURL() || browserState.url, title: browserView?.webContents.getTitle() || browserState.title, loading: browserView?.webContents.isLoading() || false, canGoBack: browserView?.webContents.navigationHistory.canGoBack() || false, canGoForward: browserView?.webContents.navigationHistory.canGoForward() || false };
+    mainWindow?.webContents.send('forge:browser-state', browserState);
+  };
+  for (const event of ['did-start-loading']) browserView.webContents.on(event, () => update({ loading: true, error: '' }));
+  for (const event of ['did-navigate', 'did-navigate-in-page', 'did-finish-load', 'page-title-updated', 'did-stop-loading']) browserView.webContents.on(event, () => update({ loading: false }));
+  browserView.webContents.on('did-fail-load', (_event, code, description, _url, isMainFrame) => {
+    if (isMainFrame && code !== -3) update({ loading: false, error: description || 'The page could not be loaded.' });
+  });
+  browserView.webContents.on('render-process-gone', () => update({ loading: false, error: 'This page stopped responding. Reload it to continue.' }));
+}
+
+function isBrowserUrl(value) {
+  try {
+    const url = new URL(String(value || ''));
+    return (url.protocol === 'https:' || url.protocol === 'http:') && !url.username && !url.password;
+  } catch { return false; }
+}
+
+function normalizeBrowserUrl(value) {
+  const input = String(value || '').trim();
+  if (!input || input.length > 2048 || /[\u0000-\u001f]/.test(input)) throw new Error('Enter a web address or search phrase.');
+  let candidate = input;
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(candidate)) {
+    if (/^(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:\/|$)/i.test(candidate)) candidate = `http://${candidate}`;
+    else if (/^[^\s.]+\.[^\s]+(?:\/|$)/.test(candidate)) candidate = `https://${candidate}`;
+    else candidate = `https://duckduckgo.com/?q=${encodeURIComponent(candidate)}`;
+  }
+  if (!isBrowserUrl(candidate)) throw new Error('The in-app browser only opens HTTP and HTTPS pages.');
+  return new URL(candidate).toString();
+}
+
+function browserSnapshot() {
+  return {
+    url: browserView.webContents.getURL(),
+    title: browserView.webContents.getTitle(),
+    loading: browserView.webContents.isLoading(),
+    canGoBack: browserView.webContents.navigationHistory.canGoBack(),
+    canGoForward: browserView.webContents.navigationHistory.canGoForward(),
+    error: browserState.error || '',
+  };
+}
+
+async function showBrowserPane() {
+  if (browserVisible) return;
+  if (!mainWindow || mainWindow.isDestroyed()) throw new Error('Forge is closing. Reopen the in-app browser after it starts.');
+  const ready = new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => { browserLayoutWaiters.delete(onReady); reject(new Error('The in-app browser could not open.')); }, 6000);
+    const onReady = () => { clearTimeout(timeout); resolve(); };
+    browserLayoutWaiters.add(onReady);
+  });
+  mainWindow.webContents.send('forge:browser-open');
+  await ready;
+}
+
+const browserPause = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+async function settleBrowserPage() {
+  await browserPause(100);
+  const contents = browserView.webContents;
+  if (contents.isLoading()) {
+    let finish;
+    let timeout;
+    await new Promise((resolve) => {
+      finish = resolve;
+      contents.once('did-stop-loading', finish);
+      timeout = setTimeout(resolve, 2500);
+    });
+    clearTimeout(timeout);
+    contents.removeListener('did-stop-loading', finish);
+  }
+  await browserPause(60);
+}
+
+async function markBrowserPointer(x, y, pressed = false) {
+  browserPointer = { x, y };
+  await browserView.webContents.executeJavaScript(`(() => {
+    let pointer = document.getElementById('__forge_agent_pointer');
+    if (!pointer) {
+      pointer = document.createElement('div'); pointer.id = '__forge_agent_pointer'; pointer.setAttribute('aria-hidden', 'true');
+      pointer.style.cssText = 'position:fixed;z-index:2147483647;width:20px;height:20px;border:2px solid #cc785c;border-radius:50%;pointer-events:none;box-shadow:0 0 0 5px #cc785c22;transform:translate(-50%,-50%);transition:left .16s ease-out,top .16s ease-out,opacity .3s ease,scale .16s ease;';
+      document.documentElement.append(pointer);
+    }
+    pointer.style.left = ${x} + 'px'; pointer.style.top = ${y} + 'px'; pointer.style.opacity = '1'; pointer.style.scale = ${pressed ? 0.8 : 1} + '';
+    clearTimeout(window.__forgePointerFade); window.__forgePointerFade = setTimeout(() => { pointer.style.opacity = '0'; }, 900);
+  })()`).catch(() => {});
+}
+
+function runBrowserCommand(action, params = {}) {
+  if (action === 'stop' && browserView) {
+    browserView.webContents.stop();
+    return Promise.resolve(browserSnapshot());
+  }
+  const next = browserCommandQueue.then(async () => {
+    const labels = { navigate: 'Opening website', snapshot: 'Reading page', screenshot: 'Capturing page', click: 'Clicking page element', type: 'Typing in page', 'press-key': 'Pressing a key', 'click-at': 'Clicking page', move: 'Moving pointer', drag: 'Dragging', scroll: 'Scrolling page', back: 'Going back', forward: 'Going forward', reload: 'Reloading page', stop: 'Stopping navigation' };
+    clearTimeout(browserActivityTimer);
+    if (labels[action]) {
+      browserState = { ...browserState, activity: labels[action], actionActive: true };
+      mainWindow?.webContents.send('forge:browser-state', browserState);
+    }
+    try { return await executeBrowserCommand(action, params); }
+    finally {
+      browserState = { ...browserState, actionActive: false };
+      mainWindow?.webContents.send('forge:browser-state', browserState);
+      browserActivityTimer = setTimeout(() => {
+        browserState = { ...browserState, activity: '' };
+        mainWindow?.webContents.send('forge:browser-state', browserState);
+      }, 1800);
+    }
+  });
+  browserCommandQueue = next.catch(() => {});
+  return next;
+}
+
+async function executeBrowserCommand(action, params = {}) {
+  if (!browserView) createBrowserView();
+  const webContents = browserView.webContents;
+  // Reveal once; returning to chat does not get undone by every tool call.
+  if (!browserAttached) await showBrowserPane();
+  if (action === 'state') return browserSnapshot();
+  if (action === 'navigate') {
+    const url = normalizeBrowserUrl(params.url);
+    let timeout;
+    let onReady;
+    const domReady = new Promise((resolve) => {
+      onReady = resolve;
+      webContents.once('dom-ready', onReady);
+      timeout = setTimeout(resolve, 12000);
+    });
+    try { await Promise.race([webContents.loadURL(url), domReady]); }
+    catch (error) { if (error.errno !== -3 && error.code !== 'ERR_ABORTED') throw error; }
+    finally { clearTimeout(timeout); webContents.removeListener('dom-ready', onReady); }
+    await settleBrowserPage();
+    return browserSnapshot();
+  }
+  if (action === 'back' || action === 'forward') {
+    const canNavigate = action === 'back' ? webContents.navigationHistory.canGoBack() : webContents.navigationHistory.canGoForward();
+    if (!canNavigate) return browserSnapshot();
+    await (action === 'back' ? webContents.navigationHistory.goBack() : webContents.navigationHistory.goForward());
+    return browserSnapshot();
+  }
+  if (action === 'reload') { webContents.reload(); return browserSnapshot(); }
+  if (action === 'stop') { webContents.stop(); return browserSnapshot(); }
+  if (action === 'snapshot') {
+    const page = await webContents.executeJavaScript(`(() => {
+      const visible = (element) => { const rect = element.getBoundingClientRect(); const style = getComputedStyle(element); return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none'; };
+      const controls = [...document.querySelectorAll('a,button,input,textarea,select,[role="button"],[role="link"],[contenteditable="true"]')].filter(visible).slice(0, 180).map((element, index) => {
+        const label = element.getAttribute('aria-label') || element.getAttribute('title') || element.innerText || element.value || element.getAttribute('placeholder') || '';
+        const rect = element.getBoundingClientRect();
+        return '[' + index + '] ' + element.tagName.toLowerCase() + (element.type ? '[type=' + element.type + ']' : '') + ' ' + JSON.stringify(String(label).trim().replace(/\\s+/g, ' ').slice(0, 150)) + ' at ' + Math.round(rect.x) + ',' + Math.round(rect.y) + ' ' + Math.round(rect.width) + 'x' + Math.round(rect.height) + (element.href ? ' → ' + element.href : '');
+      });
+      return { title: document.title, url: location.href, text: (document.body?.innerText || '').slice(0, 24000), controls };
+    })()`);
+    return { ...browserSnapshot(), text: page.text || '', controls: page.controls || [] };
+  }
+  if (action === 'screenshot') {
+    await webContents.executeJavaScript("document.getElementById('__forge_agent_pointer')?.remove()").catch(() => {});
+    const image = await webContents.capturePage();
+    const { width, height } = browserView.getBounds();
+    const alignedImage = image.resize({ width: Math.max(1, width), height: Math.max(1, height) });
+    return { ...browserSnapshot(), imageBase64: alignedImage.toPNG().toString('base64'), mimeType: 'image/png' };
+  }
+  if (action === 'click') {
+    const selector = String(params.selector || params.text || '').trim().slice(0, 500);
+    if (!selector) throw new Error('Give the browser element a label or CSS selector.');
+    const query = JSON.stringify(selector.replace(/^text=/i, ''));
+    const result = await webContents.executeJavaScript(`(() => {
+      const query = ${query};
+      const norm = (value) => String(value || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+      const visible = (element) => { const rect = element.getBoundingClientRect(); const style = getComputedStyle(element); return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none'; };
+      let element = null;
+      try { element = document.querySelector(query); } catch {}
+      if (!element) { const options = [...document.querySelectorAll('a,button,input,textarea,select,[role="button"],[role="link"],[role="checkbox"],[role="menuitem"]')].filter(visible); const exact = options.find((item) => [item.getAttribute('aria-label'), item.getAttribute('title'), item.innerText, item.value, item.getAttribute('placeholder')].some((value) => norm(value) === norm(query))); element = exact || options.find((item) => [item.getAttribute('aria-label'), item.getAttribute('title'), item.innerText, item.value, item.getAttribute('placeholder')].some((value) => norm(value).includes(norm(query)))); }
+      if (!element) return { ok: false, error: 'No visible page element matched: ' + query };
+      element.scrollIntoView({ block: 'center', inline: 'center' });
+      element.focus({ preventScroll: true });
+      const label = element.getAttribute('aria-label') || element.innerText || element.value || element.tagName.toLowerCase();
+      const rect = element.getBoundingClientRect();
+      const x = Math.max(0, Math.min(innerWidth - 1, rect.x + rect.width / 2));
+      const y = Math.max(0, Math.min(innerHeight - 1, rect.y + rect.height / 2));
+      const hit = document.elementFromPoint(x, y);
+      if (!hit || (!element.contains(hit) && !hit.contains(element))) return { ok: false, error: 'The element is covered by another page element. Close the overlay first.' };
+      return { ok: true, x, y, label: String(label).trim().slice(0, 160) };
+    })()`);
+    if (!result.ok) throw new Error(result.error);
+    const x = Math.round(result.x), y = Math.round(result.y);
+    await markBrowserPointer(x, y, true);
+    webContents.sendInputEvent({ type: 'mouseMove', x, y });
+    webContents.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: 1 });
+    webContents.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: 1 });
+    await settleBrowserPage();
+    return { ...browserSnapshot(), message: `Clicked ${result.label}.` };
+  }
+  if (action === 'type') {
+    const text = String(params.text || '').slice(0, 20000);
+    if (!text) throw new Error('Provide text to type.');
+    const selector = String(params.selector || '').trim().slice(0, 500);
+    if (selector) {
+      const query = JSON.stringify(selector.replace(/^text=/i, ''));
+      const focused = await webContents.executeJavaScript(`(() => { let element = null; try { element = document.querySelector(${query}); } catch {} if (!element) { const query = ${query}.toLowerCase(); element = [...document.querySelectorAll('input,textarea,[contenteditable="true"],[role="textbox"]')].find((item) => [item.getAttribute('aria-label'), item.getAttribute('placeholder'), item.getAttribute('name'), item.getAttribute('title')].some((value) => String(value || '').toLowerCase().includes(query))); } if (!element) return false; element.scrollIntoView({ block: 'center' }); element.focus(); if (typeof element.select === 'function') element.select(); return true; })()`);
+      if (!focused) throw new Error(`No editable field matched: ${selector}`);
+    }
+    const editable = await webContents.executeJavaScript(`(() => { const element = document.activeElement; return !!element && (['INPUT','TEXTAREA'].includes(element.tagName) || element.isContentEditable || element.getAttribute('role') === 'textbox'); })()`);
+    if (!editable) throw new Error('Click or select an editable field before typing.');
+    await webContents.insertText(text);
+    await browserPause(80);
+    return { ...browserSnapshot(), message: `Typed ${text.length} characters.` };
+  }
+  if (action === 'press-key') {
+    const allowedKeys = new Set(['ENTER', 'TAB', 'ESCAPE', 'BACKSPACE', 'DELETE', 'ARROWUP', 'ARROWDOWN', 'ARROWLEFT', 'ARROWRIGHT', 'HOME', 'END', 'PAGEUP', 'PAGEDOWN', 'SPACE', 'F5']);
+    const key = String(params.key || '').trim().toUpperCase();
+    if (!allowedKeys.has(key) && !/^(CTRL|CONTROL|ALT|SHIFT|META)(\+(CTRL|CONTROL|ALT|SHIFT|META))*\+[A-Z0-9]$/.test(key)) throw new Error('Use Enter, Tab, Escape, arrows, Backspace, Delete, Space, F5, or a modifier shortcut such as Ctrl+A.');
+    const parts = key.split('+');
+    const keyCode = parts.at(-1);
+    const modifiers = parts.slice(0, -1).map((item) => item === 'CTRL' || item === 'CONTROL' ? 'control' : item.toLowerCase());
+    const keyMap = { ENTER: 'ENTER', TAB: 'TAB', ESCAPE: 'ESC', BACKSPACE: 'BACKSPACE', DELETE: 'DELETE', ARROWUP: 'UP', ARROWDOWN: 'DOWN', ARROWLEFT: 'LEFT', ARROWRIGHT: 'RIGHT', HOME: 'HOME', END: 'END', PAGEUP: 'PAGEUP', PAGEDOWN: 'PAGEDOWN', SPACE: ' ', F5: 'F5' };
+    const code = keyMap[keyCode] || keyCode;
+    webContents.sendInputEvent({ type: 'keyDown', keyCode: code, modifiers });
+    if (!modifiers.length && ['ENTER', 'SPACE'].includes(key)) webContents.sendInputEvent({ type: 'char', keyCode: code });
+    webContents.sendInputEvent({ type: 'keyUp', keyCode: code, modifiers });
+    await settleBrowserPage();
+    return { ...browserSnapshot(), message: `Pressed ${key}.` };
+  }
+  if (action === 'click-at') {
+    const x = Math.round(Number(params.x)); const y = Math.round(Number(params.y));
+    if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0 || x > browserView.getBounds().width || y > browserView.getBounds().height) throw new Error('Click coordinates must be inside the browser page.');
+    await markBrowserPointer(x, y, true);
+    webContents.sendInputEvent({ type: 'mouseMove', x, y });
+    webContents.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: params.doubleClick ? 2 : 1 });
+    webContents.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: params.doubleClick ? 2 : 1 });
+    await settleBrowserPage();
+    return { ...browserSnapshot(), message: `Clicked at ${x}, ${y}.` };
+  }
+  if (action === 'move') {
+    const x = Math.round(Number(params.x)); const y = Math.round(Number(params.y));
+    if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0 || x > browserView.getBounds().width || y > browserView.getBounds().height) throw new Error('Pointer coordinates must be inside the browser page.');
+    const start = { ...browserPointer };
+    await markBrowserPointer(x, y);
+    for (let step = 1; step <= 8; step++) {
+      const t = 1 - Math.pow(1 - step / 8, 3);
+      webContents.sendInputEvent({ type: 'mouseMove', x: Math.round(start.x + (x - start.x) * t), y: Math.round(start.y + (y - start.y) * t) });
+      await browserPause(16);
+    }
+    return { ...browserSnapshot(), message: `Moved to ${x}, ${y}.` };
+  }
+  if (action === 'drag') {
+    const points = [params.fromX, params.fromY, params.toX, params.toY].map((value) => Math.round(Number(value)));
+    if (points.some((value) => !Number.isFinite(value) || value < 0) || points[0] > browserView.getBounds().width || points[2] > browserView.getBounds().width || points[1] > browserView.getBounds().height || points[3] > browserView.getBounds().height) throw new Error('Drag coordinates must stay inside the browser page.');
+    const [fromX, fromY, toX, toY] = points;
+    await markBrowserPointer(fromX, fromY, true);
+    webContents.sendInputEvent({ type: 'mouseMove', x: fromX, y: fromY });
+    webContents.sendInputEvent({ type: 'mouseDown', x: fromX, y: fromY, button: 'left', clickCount: 1 });
+    for (let step = 1; step <= 12; step++) {
+      const t = step / 12;
+      webContents.sendInputEvent({ type: 'mouseMove', x: Math.round(fromX + (toX - fromX) * t), y: Math.round(fromY + (toY - fromY) * t), modifiers: ['leftButtonDown'] });
+      await browserPause(16);
+    }
+    webContents.sendInputEvent({ type: 'mouseUp', x: toX, y: toY, button: 'left', clickCount: 1 });
+    await markBrowserPointer(toX, toY);
+    await settleBrowserPage();
+    return { ...browserSnapshot(), message: `Dragged from ${fromX}, ${fromY} to ${toX}, ${toY}.` };
+  }
+  if (action === 'scroll') {
+    const deltaY = Math.max(-3000, Math.min(3000, Math.round(Number(params.deltaY) || 0)));
+    const deltaX = Math.max(-1500, Math.min(1500, Math.round(Number(params.deltaX) || 0)));
+    const x = Math.max(0, Math.min(browserView.getBounds().width - 1, Math.round(Number(params.x) || 20)));
+    const y = Math.max(0, Math.min(browserView.getBounds().height - 1, Math.round(Number(params.y) || 20)));
+    let sentX = 0, sentY = 0;
+    for (let step = 1; step <= 8; step++) {
+      const nextX = Math.round(deltaX * step / 8), nextY = Math.round(deltaY * step / 8);
+      webContents.sendInputEvent({ type: 'mouseWheel', x, y, deltaY: sentY - nextY, deltaX: sentX - nextX, canScroll: true });
+      sentX = nextX; sentY = nextY;
+      await browserPause(16);
+    }
+    await browserPause(100);
+    return { ...browserSnapshot(), message: `Scrolled ${deltaY < 0 ? 'up' : 'down'} ${Math.abs(deltaY)} pixels.` };
+  }
+  throw new Error('That computer-use action is not supported by Forge.');
 }
 
 function showStartupError(message) {

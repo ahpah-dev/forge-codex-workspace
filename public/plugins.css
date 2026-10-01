@@ -26,7 +26,10 @@
 .plugin-status { min-height: 13px; color: var(--muted); font-size: calc(9px * var(--ui-scale)); line-height: 1.4; }
 .plugin-status.is-error { color: var(--danger); }
 .plugin-list { display: flex; flex-direction: column; padding-bottom: 10px; gap: 6px; }
-.plugin-card { display: grid; min-width: 0; grid-template-columns: 28px minmax(0, 1fr) auto auto; align-items: center; padding: 8px; gap: 7px; border: 1px solid var(--line); border-radius: 9px; background: var(--paper); transition: border-color .15s ease, background .15s ease; }
+.plugin-card { display: grid; min-width: 0; grid-template-columns: 28px minmax(0, 1fr) auto; align-items: center; padding: 8px; gap: 5px; border: 1px solid var(--line); border-radius: 9px; background: var(--paper); transition: border-color .15s ease, background .15s ease; }
+.plugin-card [data-plugin-action="setup"] { grid-column: 2; grid-row: 2; justify-self: start; }
+.plugin-card [data-plugin-action="toggle"] { grid-column: 3; grid-row: 1; }
+.plugin-card [data-plugin-action="remove"] { grid-column: 3; grid-row: 2; }
 .plugin-card:hover { border-color: color-mix(in srgb, var(--accent) 24%, var(--line)); background: color-mix(in srgb, var(--accent) 2.5%, var(--paper)); }
 .plugin-card-mark { display: grid; place-items: center; width: 27px; height: 27px; border: 1px solid var(--line); border-radius: 8px; color: var(--accent); background: var(--sidebar); font-size: 14px; }
 .plugin-card-copy { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
@@ -58,3 +61,21 @@
 @keyframes plugin-mention-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
 @media (prefers-reduced-motion: reduce) { .plugin-card, .plugin-refresh, .plugin-enable, .plugin-action { transition: none; } }
 @media (prefers-reduced-motion: reduce) { .plugin-mention-menu { animation: none; } }
+.plugin-setup-panel { margin: -2px 0 4px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); animation: plugin-mention-in .18s ease-out; }
+.plugin-setup-panel > p { margin: 0 0 10px; color: var(--muted); font-size: calc(10px * var(--ui-scale)); line-height: 1.5; }
+.plugin-setup-panel > small { display: block; margin-top: 8px; color: var(--muted); font-size: calc(9px * var(--ui-scale)); }
+.plugin-connection-row { display: flex; align-items: center; min-width: 0; padding: 8px 0; gap: 6px; border-top: 1px solid var(--line); font-size: calc(10px * var(--ui-scale)); }
+.plugin-connection-row > span { flex: 0 0 auto; color: var(--ink); }
+.plugin-connection-row > small { min-width: 0; overflow: hidden; color: var(--muted); font-size: calc(8px * var(--ui-scale)); text-overflow: ellipsis; white-space: nowrap; }
+.plugin-connection-row > .plugin-action { display: inline-flex; flex: 0 0 auto; margin-left: auto; align-items: center; text-decoration: none; }
+.plugin-connection-row > small.is-ready { color: var(--success); }
+.plugin-setup-actions { display: flex; justify-content: flex-end; margin-top: 12px; gap: 6px; }
+.plugin-request-card { display: flex; flex-direction: column; gap: 10px; }
+.plugin-request-card > p { margin: 0; }
+.plugin-request-card > small { color: var(--muted); font-size: 11px; }
+.plugin-request-field { display: flex; flex-direction: column; gap: 6px; color: var(--ink); font-size: 12px; }
+.plugin-request-field input, .plugin-request-field select { padding: 9px 11px; border: 1px solid var(--line); border-radius: 9px; color: var(--ink); background: var(--paper); font: inherit; outline: none; }
+.plugin-request-field input:focus, .plugin-request-field select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 10%, transparent); }
+.plugin-request-field small { color: var(--muted); line-height: 1.5; }
+.plugin-signin-link { align-self: flex-start; padding: 8px 11px; border: 1px solid var(--line); border-radius: 9px; color: var(--accent); text-decoration: none; background: var(--paper); font-size: 12px; }
+@media (prefers-reduced-motion: reduce) { .plugin-setup-panel { animation: none; } }

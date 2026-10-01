@@ -13,6 +13,7 @@ import { createFreeRouter, FREE_PROVIDER_ID, FREE_KEY_IDS, isCodexLimitError, ex
 import { bridgeResponses, createChatProviderRouter, providerApiFormat } from './responses-bridge.mjs';
 import { browserCodexConfig } from './browser-config.mjs';
 import './public/question-protocol.js';
+import './public/plugin-protocol.js';
 
 const execFileAsync = promisify(execFile);
 const appRoot = path.dirname(fileURLToPath(import.meta.url));
@@ -34,6 +35,7 @@ const defaultSettings = { activeWorkspace: '', recentWorkspaces: [], providers: 
 let pluginCatalogCache = null;
 let pluginCatalogCacheAt = 0;
 let pluginCatalogLoading = null;
+const pluginSetupCache = new Map();
 let installedPluginCache = null;
 let installedPluginCacheAt = 0;
 let marketplaceCache = null;
@@ -47,6 +49,42 @@ let threadOpenRevision = 0;
 const turnRequests = new Map();
 const turnErrors = new Map();
 const fallbackJobs = new Map();
+const pendingComputerUse = new Map();
+let computerUseQueue = Promise.resolve();
+
+process.on('message', (message) => {
+  if (message?.type !== 'forge:computer-use-result' || !message.id) return;
+  const pending = pendingComputerUse.get(message.id);
+  if (!pending) return;
+  pendingComputerUse.delete(message.id);
+  clearTimeout(pending.timeout);
+  if (message.error) pending.reject(new Error(message.error));
+  else pending.resolve(message.result);
+});
+
+function requestDesktopComputerUse(action, params) {
+  if (typeof process.send !== 'function' || !process.connected) return Promise.reject(new Error('The in-app computer-use browser is only available in the Forge desktop app.'));
+  const id = randomBytes(12).toString('hex');
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      pendingComputerUse.delete(id);
+      reject(new Error('The in-app browser did not respond in time.'));
+    }, 90000);
+    pendingComputerUse.set(id, { resolve, reject, timeout });
+    process.send({ type: 'forge:computer-use', id, action, params }, (error) => {
+      if (!error) return;
+      pendingComputerUse.delete(id);
+      clearTimeout(timeout);
+      reject(error);
+    });
+  });
+}
+
+function runDesktopComputerUse(action, params) {
+  const next = computerUseQueue.then(() => requestDesktopComputerUse(action, params));
+  computerUseQueue = next.catch(() => {});
+  return next;
+}
 
 function json(res, status, payload) {
   const body = JSON.stringify(payload);
@@ -117,6 +155,46 @@ function compactPlugin(plugin) {
   };
 }
 
+async function getPluginSetup(pluginId, forceRefresh = false) {
+  const cached = pluginSetupCache.get(pluginId);
+  if (!forceRefresh && cached && Date.now() - cached.at < 60000) return cached.result;
+  const plugin = (await getInstalledPlugins()).find((entry) => entry.pluginId === pluginId);
+  if (!plugin) throw new Error('This plugin is not installed. Refresh Plugins first.');
+  const marketplaces = await getPluginMarketplaces();
+  const marketplace = marketplaces.find((entry) => entry.name === plugin.marketplaceName);
+  const selector = marketplace && !plugin.marketplaceName.includes('remote')
+    ? { marketplacePath: marketplace.root, pluginName: plugin.name }
+    : { remoteMarketplaceName: plugin.marketplaceName, pluginName: plugin.name };
+  const [{ plugin: detail }, runtime] = await Promise.all([
+    codex.rpc('plugin/read', selector, 45000),
+    codex.rpc('app/installed', { forceRefresh }, 45000),
+  ]);
+  const apps = (detail.apps || []).map((app) => {
+    const state = (runtime.apps || []).find((entry) => entry.id === app.id);
+    return { ...app, available: Boolean(state), enabled: state?.enabled === true, callable: state?.callable === true };
+  });
+  const servers = [];
+  let cursor;
+  do {
+    const page = await codex.rpc('mcpServerStatus/list', { cursor, limit: 100, detail: 'toolsAndAuthOnly' }, 45000);
+    for (const server of page.data || []) {
+      if (server.pluginId === pluginId || (detail.mcpServers || []).includes(server.name)) {
+        servers.push({ name: server.name, authStatus: server.authStatus, status: server.runtimeStatus, error: server.toolsError, toolCount: Object.keys(server.tools || {}).length });
+      }
+    }
+    cursor = page.nextCursor;
+  } while (cursor);
+  const result = { pluginId, description: detail.description || '', apps, servers, skills: (detail.skills || []).map((skill) => skill.name) };
+  pluginSetupCache.set(pluginId, { result, at: Date.now() });
+  return result;
+}
+
+async function refreshPluginRuntime() {
+  pluginSetupCache.clear();
+  await codex.rpc('config/mcpServer/reload', {}, 45000);
+  await codex.rpc('app/installed', { forceRefresh: true }, 45000);
+}
+
 async function getInstalledPlugins(force = false) {
   if (!force && installedPluginCache && Date.now() - installedPluginCacheAt < 45000) return installedPluginCache;
   const output = await codexPluginCommand(['list', '--json']);
@@ -154,6 +232,7 @@ async function getPluginMarketplaces(force = false) {
 }
 
 function invalidatePluginCaches() {
+  pluginSetupCache.clear();
   pluginCatalogCache = null;
   installedPluginCache = null;
   marketplaceCache = null;
@@ -468,7 +547,7 @@ class CodexAppServer {
   }
 
   async start() {
-    const child = spawn(codexExecutable, codexArgs(['app-server', '--listen', 'stdio://', '-c', 'features.default_mode_request_user_input=true']), {
+    const child = spawn(codexExecutable, codexArgs(['app-server', '--listen', 'stdio://', '-c', 'features.default_mode_request_user_input=true', '-c', 'features.apps=true', '-c', 'features.plugins=true']), {
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
       env: process.env,
@@ -496,7 +575,7 @@ class CodexAppServer {
       this.emit({ type: 'connection', connected: false, message: 'Codex connection closed.' });
     });
     await this.requestRaw('initialize', {
-      clientInfo: { name: 'forge_coding_workspace', title: 'Forge', version: '1.0.0' },
+      clientInfo: { name: 'forge_coding_workspace', title: 'Forge', version: '1.0.26' },
       capabilities: { experimentalApi: true },
     });
     this.notify('initialized', {});
@@ -676,7 +755,6 @@ async function startCodexTask(input, cwd, { announceContinuation, signal } = {})
   if (providerId !== 'openai' && !provider) throw new Error('That provider is no longer configured. Refresh the model list.');
   const pluginMentions = [];
   if (Array.isArray(input.pluginMentions) && input.pluginMentions.length) {
-    if (providerId !== 'openai') throw new Error('Codex plugins can only be mentioned in an official Codex session.');
     if (input.pluginMentions.length > 10) throw new Error('Mention at most ten Codex plugins in one message.');
     const installed = await getInstalledPlugins();
     const seen = new Set();
@@ -687,6 +765,13 @@ async function startCodexTask(input, cwd, { announceContinuation, signal } = {})
       if (!plugin) throw new Error('That plugin is not enabled in your Codex account. Refresh the plugin list and try again.');
       if (!String(input.text || '').includes(`@${plugin.name}`)) throw new Error('The message no longer contains the selected plugin mention.');
       pluginMentions.push({ type: 'mention', name: plugin.name, path: `plugin://${plugin.name}@${plugin.marketplaceName}` });
+      // App mentions make a plugin's already connected service tools explicit to the model.
+      const setup = await getPluginSetup(pluginId).catch(() => ({ apps: [] }));
+      for (const app of setup.apps.filter((app) => app.callable)) {
+        if (!pluginMentions.some((mention) => mention.path === `app://${app.id}`)) {
+          pluginMentions.push({ type: 'mention', name: app.name, path: `app://${app.id}` });
+        }
+      }
       seen.add(pluginId);
     }
   }
@@ -1012,20 +1097,25 @@ async function handleApi(req, res, url) {
   }
   if (req.method === 'GET' && route === '/api/plugins') {
     try {
+      const refresh = url.searchParams.get('refresh') === '1';
       const view = url.searchParams.get('view') || 'installed';
       if (!['installed', 'discover', 'marketplaces'].includes(view)) throw new Error('Choose a valid Plugins view.');
-      if (view === 'marketplaces') return json(res, 200, { view, marketplaces: await getPluginMarketplaces() });
-      const installed = await getInstalledPlugins();
+      if (view === 'marketplaces') return json(res, 200, { view, marketplaces: await getPluginMarketplaces(refresh) });
+      const installed = await getInstalledPlugins(refresh);
       if (view === 'installed') return json(res, 200, { view, plugins: installed, total: installed.length });
       const query = String(url.searchParams.get('q') || '').trim().slice(0, 100).toLocaleLowerCase();
       const offset = Math.max(0, Number.parseInt(url.searchParams.get('offset') || '0', 10) || 0);
       const limit = Math.min(60, Math.max(1, Number.parseInt(url.searchParams.get('limit') || '36', 10) || 36));
       const installedIds = new Set(installed.map((plugin) => plugin.pluginId));
-      const matching = (await getPluginCatalog())
+      const matching = (await getPluginCatalog(refresh))
         .filter((plugin) => !installedIds.has(plugin.pluginId))
         .filter((plugin) => !query || `${plugin.name} ${plugin.pluginId} ${plugin.marketplaceName}`.toLocaleLowerCase().includes(query));
       return json(res, 200, { view, plugins: matching.slice(offset, offset + limit), total: matching.length, offset, limit });
     } catch (error) { return json(res, 503, { error: error.message || 'Could not load Codex plugins.' }); }
+  }
+  if (req.method === 'GET' && route === '/api/plugins/setup') {
+    try { return json(res, 200, await getPluginSetup(validatePluginSelector(url.searchParams.get('pluginId')), url.searchParams.get('refresh') === '1')); }
+    catch (error) { return json(res, 400, { error: error.message }); }
   }
   if (req.method === 'GET' && route === '/api/tree') {
     try { return json(res, 200, { entries: await readTree(url.searchParams.get('dir') || '') }); }
@@ -1043,12 +1133,28 @@ async function handleApi(req, res, url) {
     let input;
     try { input = await bodyJson(req); } catch (error) { return json(res, 400, { error: error.message }); }
     try {
+      if (route === '/api/plugins/connect') {
+        const setup = await getPluginSetup(validatePluginSelector(input.pluginId));
+        const server = setup.servers.find((entry) => entry.name === input.serverName);
+        if (!server) throw new Error('Choose a server from this plugin’s setup panel.');
+        const result = await codex.rpc('mcpServer/oauth/login', { name: server.name }, 45000);
+        return json(res, 200, result);
+      }
+      if (route === '/api/plugins/app/enable') {
+        const setup = await getPluginSetup(validatePluginSelector(input.pluginId));
+        const app = setup.apps.find((entry) => entry.id === input.appId);
+        if (!app) throw new Error('Choose a connection declared by this plugin.');
+        await codex.rpc('config/value/write', { keyPath: `apps.${app.id}.enabled`, value: true, mergeStrategy: 'upsert' });
+        await refreshPluginRuntime();
+        return json(res, 200, { ok: true });
+      }
       if (route === '/api/plugins/install') {
         const pluginId = validatePluginSelector(input.pluginId);
         const available = await getPluginCatalog();
         if (!available.some((plugin) => plugin.pluginId === pluginId)) throw new Error('That plugin is no longer available. Refresh the catalog and try again.');
         await codexPluginCommand(['add', pluginId, '--json'], { timeout: 240000 });
         invalidatePluginCaches();
+        await refreshPluginRuntime();
         return json(res, 200, { ok: true, newSessionRequired: true });
       }
       if (route === '/api/plugins/remove') {
@@ -1065,6 +1171,7 @@ async function handleApi(req, res, url) {
         if (!installed.some((plugin) => plugin.pluginId === pluginId)) throw new Error('That plugin is no longer installed. Refresh the list and try again.');
         await setCodexPluginEnabled(pluginId, input.enabled === true);
         invalidatePluginCaches();
+        await refreshPluginRuntime();
         return json(res, 200, { ok: true, newSessionRequired: true });
       }
       if (route === '/api/plugins/marketplaces/add') {
@@ -1309,6 +1416,12 @@ async function handleApi(req, res, url) {
           const decision = String(input.decision || 'decline');
           if (!['accept', 'decline'].includes(decision)) throw new Error('Choose Accept or Decline.');
           codex.reply(id, { permissions: decision === 'accept' ? params.permissions || {} : {}, scope: input.scope === 'session' ? 'session' : 'turn' });
+        } else if (method === 'mcpServer/elicitation/request') {
+          const action = String(input.decision || 'decline');
+          if (!['accept', 'decline', 'cancel'].includes(action)) throw new Error('Choose Continue, Decline, or Cancel.');
+          if (action === 'accept' && params.mode !== 'url' && !['form', 'openai/form', 'openaiForm'].includes(params.mode)) throw new Error('This verification needs its original client. Open it in Codex.');
+          const content = action === 'accept' && params.mode !== 'url' ? ForgePluginForms.validate(params.requestedSchema, input.content) : null;
+          codex.reply(id, { action, content, _meta: null });
         } else if (method === 'tool/requestUserInput' || method === 'item/tool/requestUserInput') {
           const answers = input.decision === 'skip' ? {} : ForgeQuestions.validate(params.questions, input.answers);
           codex.reply(id, { answers });
@@ -1338,6 +1451,19 @@ const mimeTypes = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; char
 const httpServer = createServer(async (req, res) => {
   setSecurityHeaders(res);
   const url = new URL(req.url || '/', `http://${host}:${port}`);
+  if (url.pathname === '/internal/computer-use') {
+    if (req.method !== 'POST') return json(res, 405, { error: 'Method not allowed.' });
+    if (req.headers.authorization !== `Bearer ${bridgeToken}` || req.headers.origin) return json(res, 403, { error: 'Invalid local computer-use session.' });
+    try {
+      const input = await bodyJson(req);
+      const action = String(input.action || '');
+      if (!['state', 'navigate', 'back', 'forward', 'reload', 'stop', 'snapshot', 'screenshot', 'click', 'type', 'press-key', 'click-at', 'move', 'drag', 'scroll'].includes(action)) throw new Error('Choose a supported in-app browser action.');
+      const result = await runDesktopComputerUse(action, input.params && typeof input.params === 'object' ? input.params : {});
+      return json(res, 200, { result });
+    } catch (error) {
+      return json(res, 502, { error: error.message || 'The in-app browser action failed.' });
+    }
+  }
   const providerBridge = url.pathname.match(/^\/internal\/providers\/([a-z0-9_-]+)\/responses$/);
   if (url.pathname === '/internal/free-route/responses' || providerBridge) {
     if (req.method !== 'POST') return json(res, 405, { error: { message: 'Method not allowed.' } });
@@ -1405,6 +1531,10 @@ function listenOnAvailablePort(startPort, remaining = 10) {
 
 const actualPort = await listenOnAvailablePort(port);
 const localUrl = `http://${host}:${actualPort}`;
+if (process.env.FORGE_IN_APP_BROWSER === '1') {
+  process.env.FORGE_BROWSER_API_URL = `${localUrl}/internal/computer-use`;
+  process.env.FORGE_BROWSER_API_TOKEN = bridgeToken;
+}
 console.log(`Forge is ready at ${localUrl}`);
 const accountWarmup = codex.ensureStarted()
   .then(getAppState)

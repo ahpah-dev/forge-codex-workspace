@@ -40,6 +40,7 @@ const state = {
   activeContextTab: 'files',
   plugins: { view: 'installed', installed: [], installedLoaded: false, available: [], marketplaces: [], query: '', total: 0, offset: 0, loading: false, busyKey: '', error: '', loaded: false, sourceFormOpen: false, requestId: 0, searchTimer: null, mentionLoading: false, mentionContext: null, mentionRows: [], mentionSelectedIndex: 0 },
   composerPluginMentions: [],
+  browser: { active: false, expanded: false, url: '', title: '', loading: false, canGoBack: false, canGoForward: false, error: '', activity: '', actionActive: false },
   collapsedAgentGroups: new Set(['complete']),
   selectedAgentId: null,
   agentFilter: 'all',
@@ -164,10 +165,143 @@ function showToast(message, type = '') {
   setTimeout(() => toast.remove(), 4200);
 }
 
+const inAppBrowserAvailable = Boolean(window.ForgeDesktop?.computerUse);
+$('#browser-toggle').hidden = !inAppBrowserAvailable;
+let lastBrowserLayout = '';
+
+function updateBrowserLayout() {
+  if (!inAppBrowserAvailable) return;
+  const slot = $('#browser-page-slot');
+  const column = $('.main-column');
+  column.classList.toggle('browser-compact', column.clientWidth < 760);
+  const bounds = slot.getBoundingClientRect();
+  const layout = {
+    active: state.browser.active && !column.inert && !$('#browser-workspace').hidden && !$$('.modal-backdrop').some((modal) => !modal.hidden),
+    x: Math.round(bounds.left), y: Math.round(bounds.top), width: Math.round(bounds.width), height: Math.round(bounds.height),
+  };
+  const signature = JSON.stringify(layout);
+  if (signature === lastBrowserLayout) return;
+  lastBrowserLayout = signature;
+  window.ForgeDesktop.setBrowserLayout(layout);
+}
+
+function renderBrowserState() {
+  const browser = state.browser;
+  const address = $('#browser-address');
+  if (document.activeElement !== address) address.value = browser.url;
+  $('#browser-back').disabled = !browser.canGoBack;
+  $('#browser-forward').disabled = !browser.canGoForward;
+  $('#browser-security-note').textContent = browser.error || (browser.loading ? 'Loading page…' : 'Private to Forge');
+  $('#browser-security-note').classList.toggle('is-loading', browser.loading);
+  $('#browser-security-note').classList.toggle('is-error', Boolean(browser.error));
+  $('#browser-action-status').textContent = browser.error || browser.activity || (browser.loading ? 'Loading page' : 'Ready for you or your agent');
+  $('#browser-live-dot').classList.toggle('is-active', browser.actionActive || browser.loading);
+  $('#browser-page-title').textContent = browser.title;
+  $('#browser-page-title').title = browser.title;
+  $('#browser-toggle').classList.toggle('is-working', browser.actionActive);
+  $('#browser-reload').classList.toggle('is-loading', browser.loading);
+  $('#browser-reload').title = browser.loading ? 'Stop loading' : 'Reload';
+  $('#browser-expand').setAttribute('aria-pressed', String(browser.expanded));
+  $('#browser-expand').title = browser.expanded ? 'Show chat alongside browser' : 'Expand browser';
+  $('#browser-expand').setAttribute('aria-label', $('#browser-expand').title);
+  $('#browser-security-note').title = browser.error || browser.title || '';
+  $('#browser-workspace').classList.toggle('has-browser-page', Boolean(browser.url));
+  $('#browser-toggle').setAttribute('aria-pressed', String(browser.active));
+  $('#browser-toggle').setAttribute('aria-label', browser.active ? 'Return to the Forge conversation' : "Open Forge's in-app browser");
+  $('#browser-toggle').title = browser.active ? 'Return to chat · Ctrl+Shift+5' : 'In-app browser · Ctrl+Shift+5';
+}
+
+function setBrowserMode(active) {
+  if (!inAppBrowserAvailable) return;
+  state.browser.active = Boolean(active);
+  $('.main-column').classList.toggle('browser-mode', state.browser.active);
+  $('.main-column').classList.toggle('browser-expanded', state.browser.expanded);
+  $('#browser-workspace').hidden = !state.browser.active;
+  renderBrowserState();
+  requestAnimationFrame(() => { updateBrowserLayout(); positionWelcomeSuggestions(); });
+}
+
+async function runBrowserCommand(action, params = {}) {
+  if (!inAppBrowserAvailable) return;
+  try {
+    const result = await window.ForgeDesktop.browserCommand(action, params);
+    if (result && typeof result === 'object') {
+      state.browser = { ...state.browser, ...result, active: true };
+      renderBrowserState();
+    }
+    return result;
+  } catch (error) {
+    state.browser.error = error.message || 'The in-app browser action failed.';
+    renderBrowserState();
+    showToast(state.browser.error, 'error');
+    return null;
+  }
+}
+
+if (inAppBrowserAvailable) {
+  window.ForgeDesktop.onBrowserOpen(() => { lastBrowserLayout = ''; setBrowserMode(true); });
+  window.ForgeDesktop.onBrowserState((browser) => {
+    state.browser = { ...state.browser, ...browser };
+    renderBrowserState();
+    if (state.browser.active) requestAnimationFrame(updateBrowserLayout);
+  });
+  $('#browser-toggle').addEventListener('click', () => setBrowserMode(!state.browser.active));
+  $('#browser-return').addEventListener('click', () => setBrowserMode(false));
+  $('#browser-navigation-form').addEventListener('submit', (event) => {
+    event.preventDefault();
+    const url = $('#browser-address').value.trim();
+    if (url) void runBrowserCommand('navigate', { url });
+  });
+  $('#browser-address').addEventListener('focus', (event) => event.currentTarget.select());
+  $('#browser-back').addEventListener('click', () => void runBrowserCommand('back'));
+  $('#browser-forward').addEventListener('click', () => void runBrowserCommand('forward'));
+  $('#browser-reload').addEventListener('click', () => void runBrowserCommand(state.browser.loading ? 'stop' : 'reload'));
+  $('#browser-expand').addEventListener('click', () => { state.browser.expanded = !state.browser.expanded; setBrowserMode(true); });
+  const setBrowserWidth = (width) => {
+    const column = $('.main-column');
+    const value = Math.round(Math.max(320, Math.min(column.clientWidth - 320, width)));
+    column.style.setProperty('--browser-width', value + 'px');
+    $('#browser-resize').setAttribute('aria-valuenow', String(value));
+    $('#browser-resize').setAttribute('aria-valuemax', String(Math.max(320, column.clientWidth - 320)));
+    requestAnimationFrame(updateBrowserLayout);
+  };
+  $('#browser-resize').addEventListener('pointerdown', (event) => {
+    if (event.button !== 0) return;
+    const handle = event.currentTarget;
+    handle.setPointerCapture(event.pointerId);
+    document.body.classList.add('resizing-browser');
+    const move = (pointer) => setBrowserWidth($('.main-column').getBoundingClientRect().right - pointer.clientX - 12);
+    const finish = () => {
+      handle.removeEventListener('pointermove', move);
+      handle.removeEventListener('pointerup', finish);
+      handle.removeEventListener('pointercancel', finish);
+      document.body.classList.remove('resizing-browser');
+      requestAnimationFrame(updateBrowserLayout);
+    };
+    handle.addEventListener('pointermove', move);
+    handle.addEventListener('pointerup', finish);
+    handle.addEventListener('pointercancel', finish);
+  });
+  $('#browser-resize').addEventListener('keydown', (event) => {
+    if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+    event.preventDefault();
+    setBrowserWidth($('#browser-workspace').getBoundingClientRect().width + (event.key === 'ArrowLeft' ? 24 : -24));
+  });
+  $('#browser-open-external').addEventListener('click', async () => {
+    try { await window.ForgeDesktop.openBrowserExternal(); }
+    catch (error) { showToast(error.message || 'Could not open the page in your default browser.', 'error'); }
+  });
+  const browserSlotObserver = new ResizeObserver(() => { if (state.browser.active) updateBrowserLayout(); });
+  browserSlotObserver.observe($('#browser-page-slot'));
+  browserSlotObserver.observe($('.main-column'));
+  renderBrowserState();
+}
+
 function setModal(id, open) {
   const modal = document.getElementById(id);
   if (!modal) return;
   modal.hidden = !open;
+  if (inAppBrowserAvailable) requestAnimationFrame(updateBrowserLayout);
   if (id === 'agent-assign-modal') {
     $('.app-shell').inert = open;
     if (!open) ($('#agent-assign').disabled ? $('#context-close') : $('#agent-assign')).focus({ preventScroll: true });
@@ -1515,6 +1649,7 @@ function renderContext() {
     ? state.git.entries.map((item) => `${item.status.padEnd(2, ' ')}  ${item.path}`).join('\n')
     : '';
   renderChangeSummary(fallback);
+  if (inAppBrowserAvailable) requestAnimationFrame(updateBrowserLayout);
 }
 
 function formatLineCount(value) {
@@ -2718,6 +2853,7 @@ function handleCodexEvent(event) {
     if (state.threadId && event.params?.threadId && event.params.threadId !== state.threadId) return;
     if (state.activeTurnId && event.params?.turnId && event.params.turnId !== state.activeTurnId) return;
     if (!state.threadId && state.pendingSend && event.params?.threadId) state.threadId = event.params.threadId;
+    if (state.browser.active && (state.browser.expanded || $('.main-column').classList.contains('browser-compact'))) setBrowserMode(false);
     const prior = state.approvals.findIndex((request) => String(request.id) === String(event.id));
     if (prior >= 0) state.approvals[prior] = event;
     else state.approvals.push(event);
@@ -3092,7 +3228,56 @@ function renderQuestionRequest(event, actor) {
   return card;
 }
 
+function renderPluginRequest(event) {
+  const params = event.params || {};
+  const card = document.createElement('section'); card.className = 'approval-card plugin-request-card'; card.id = 'plugin-request-' + event.id;
+  const title = document.createElement('div'); title.className = 'approval-topline'; title.textContent = (params.serverName || 'Plugin') + ' needs your input';
+  const message = document.createElement('p'); message.textContent = params.message || params.description || 'Complete this step to continue.';
+  card.append(title, message);
+  let supported = true;
+  if (params.mode === 'url') {
+    if (/^https:\/\//i.test(params.url || '')) {
+      const link = document.createElement('a'); link.className = 'plugin-signin-link'; link.href = params.url; link.target = '_blank'; link.rel = 'noopener noreferrer'; link.textContent = 'Open sign-in page ↗';
+      const hint = document.createElement('small'); hint.textContent = 'Complete the sign-in, then click Continue below.'; card.append(link, hint);
+    } else { supported = false; const note = document.createElement('p'); note.textContent = 'This plugin returned an unsupported sign-in address.'; card.append(note); }
+  } else if (['form', 'openai/form', 'openaiForm'].includes(params.mode)) {
+    try {
+      for (const field of ForgePluginForms.fields(params.requestedSchema)) {
+        const label = document.createElement('label'); label.className = 'plugin-request-field';
+        const name = document.createElement('span'); name.textContent = field.title + (field.required ? ' *' : ''); label.append(name);
+        let control;
+        if (field.options?.length || field.type === 'boolean') {
+          control = document.createElement('select');
+          if (field.type === 'array') control.multiple = true;
+          else { const blank = document.createElement('option'); blank.value = ''; blank.textContent = 'Choose an option'; control.append(blank); }
+          const options = field.type === 'boolean' ? [{ value: true, label: 'Yes' }, { value: false, label: 'No' }] : field.options;
+          options.forEach((option, index) => {
+            const node = document.createElement('option'); node.value = field.type === 'boolean' ? String(option.value) : String(index); node.textContent = option.label;
+            node.selected = field.type === 'array' ? (field.default || []).includes(option.value) : field.default === option.value;
+            control.append(node);
+          });
+        } else {
+          control = document.createElement('input'); control.type = ['number', 'integer'].includes(field.type) ? 'number' : field.format === 'email' ? 'email' : field.format === 'uri' ? 'url' : field.format === 'date' ? 'date' : 'text';
+          if (['number', 'integer'].includes(field.type)) { control.step = field.type === 'integer' ? '1' : 'any'; if (field.minimum != null) control.min = String(field.minimum); if (field.maximum != null) control.max = String(field.maximum); }
+          else { control.maxLength = Math.min(field.maxLength ?? 10000, 10000); if (field.minLength) control.minLength = field.minLength; }
+          if (field.default !== undefined) control.value = String(field.default);
+        }
+        control.dataset.pluginField = field.key; control.required = field.required; label.append(control);
+        if (field.description) { const description = document.createElement('small'); description.textContent = field.description; label.append(description); }
+        card.append(label);
+      }
+    } catch (error) { supported = false; const note = document.createElement('p'); note.textContent = error.message; card.append(note); }
+  } else { supported = false; const note = document.createElement('p'); note.textContent = 'This verification requires the Codex app. Open the plugin there to finish connecting.'; card.append(note); }
+  const actions = document.createElement('div'); actions.className = 'approval-actions';
+  for (const [decision, text] of [['decline', 'Decline'], ['accept', 'Continue']]) {
+    const button = document.createElement('button'); button.type = 'button'; button.textContent = text; button.dataset.approvalId = String(event.id); button.dataset.decision = decision;
+    button.className = decision === 'accept' ? 'approval-allow' : 'approval-deny'; button.disabled = decision === 'accept' && !supported; actions.append(button);
+  }
+  card.append(actions); return card;
+}
+
 function renderApproval(event) {
+  if (event.method === 'mcpServer/elicitation/request') return renderPluginRequest(event);
   const card = document.createElement('section');
   card.className = 'approval-card';
   const method = event.method || '';
@@ -3197,18 +3382,39 @@ async function answerApproval(id, decision) {
   const event = state.approvals.find((request) => String(request.id) === String(id));
   if (!event) return;
   const isQuestion = ForgeQuestions.isRequest(event.method);
+  let pluginButtonStates = [];
   if (state.questionSending.has(String(id))) return;
   try {
     let body = { id, decision };
+    if (event.method === 'mcpServer/elicitation/request' && decision === 'accept' && event.params.mode !== 'url') {
+      const form = document.getElementById('plugin-request-' + id);
+      const content = Object.create(null);
+      for (const field of ForgePluginForms.fields(event.params.requestedSchema)) {
+        const control = Array.from(form.querySelectorAll('[data-plugin-field]')).find((input) => input.dataset.pluginField === field.key);
+        if (!control || !control.reportValidity()) return;
+        if (field.type === 'array') content[field.key] = Array.from(control.selectedOptions).map((option) => field.options[Number(option.value)].value);
+        else if (control.value !== '') content[field.key] = field.options?.length ? field.options[Number(control.value)].value : field.type === 'boolean' ? control.value === 'true' : ['number', 'integer'].includes(field.type) ? Number(control.value) : control.value;
+      }
+      body.content = ForgePluginForms.validate(event.params.requestedSchema, content);
+    }
     if (decision === 'answer') {
       body.answers = ForgeQuestions.fromDraft(event.params?.questions || [], state.questionDrafts.get(String(id)));
     }
     if (isQuestion) { state.questionSending.add(String(id)); renderApprovalSlot(); }
+    else if (event.method === 'mcpServer/elicitation/request') {
+      state.questionSending.add(String(id));
+      pluginButtonStates = Array.from(document.getElementById('plugin-request-' + id)?.querySelectorAll('button') || []).map((button) => [button, button.disabled]);
+      pluginButtonStates.forEach(([button]) => { button.disabled = true; });
+    }
     await api('/api/approval', { method: 'POST', body });
     state.approvals = state.approvals.filter((request) => String(request.id) !== String(id));
     if (isQuestion) setActivityStatus(liveActivities.current() || 'Continuing with your answer');
   } catch (error) { showToast(error.message, 'error'); }
-  finally { state.questionSending.delete(String(id)); renderMessages(); }
+  finally {
+    state.questionSending.delete(String(id));
+    pluginButtonStates.forEach(([button, disabled]) => { button.disabled = disabled; });
+    renderMessages();
+  }
 }
 
 function cacheThreadHistory(threadId, result) {
@@ -3348,7 +3554,7 @@ async function sendMessage(textOverride, { readOnlyOverride, routingText, replac
   let selectedModel = state.models.find((model) => model.id === state.modelId);
   const textarea = $('#prompt-input');
   const text = String(textOverride ?? textarea.value).trim();
-  const pluginMentions = textOverride === undefined && (!selectedModel?.providerId || selectedModel.providerId === 'openai')
+  const pluginMentions = textOverride === undefined && selectedModel?.providerId !== 'anthropic'
     ? state.composerPluginMentions.filter((mention) => text.includes(mention.token)).map((mention) => ({ pluginId: mention.pluginId }))
     : [];
   const selectedImages = (imagesOverride ?? state.pendingImages).map((image) => {
@@ -3601,6 +3807,10 @@ function renderPluginManager() {
     copy.append(name, meta);
     card.append(mark, copy);
     if (plugins.view === 'installed') {
+      const setup = document.createElement('button');
+      setup.className = 'plugin-action'; setup.type = 'button'; setup.textContent = plugins.setupOpen === plugin.pluginId ? 'Hide' : 'Setup';
+      setup.dataset.pluginAction = 'setup'; setup.dataset.pluginId = plugin.pluginId;
+      setup.setAttribute('aria-expanded', String(plugins.setupOpen === plugin.pluginId));
       const toggle = document.createElement('button');
       toggle.className = `plugin-enable${plugin.enabled ? ' enabled' : ''}`;
       toggle.type = 'button';
@@ -3618,7 +3828,7 @@ function renderPluginManager() {
       remove.dataset.pluginId = plugin.pluginId;
       remove.disabled = Boolean(plugins.busyKey);
       toggle.disabled = Boolean(plugins.busyKey);
-      card.append(toggle, remove);
+      card.append(setup, toggle, remove);
     } else {
       const install = document.createElement('button');
       install.className = 'plugin-action install';
@@ -3630,9 +3840,76 @@ function renderPluginManager() {
       card.append(install);
     }
     list.append(card);
+    if (plugins.setupOpen === plugin.pluginId && plugins.view === 'installed') list.append(renderPluginSetup(plugin));
   }
   $('#plugin-load-more').hidden = plugins.view !== 'discover' || plugins.available.length >= plugins.total || !plugins.available.length;
   $('#plugin-load-more').disabled = plugins.loading || Boolean(plugins.busyKey);
+}
+
+function renderPluginSetup(plugin) {
+  const panel = document.createElement('section'); panel.className = 'plugin-setup-panel';
+  const setup = state.plugins.setupDetails?.get(plugin.pluginId);
+  const note = document.createElement('p');
+  note.textContent = setup?.description || (setup ? 'Plugin capabilities and account connections' : 'Checking plugin connections…');
+  panel.append(note);
+  if (!setup) return panel;
+  if (setup.error) { note.textContent = setup.error; return panel; }
+  for (const app of setup.apps) {
+    const row = document.createElement('div'); row.className = 'plugin-connection-row';
+    const label = document.createElement('span'); label.textContent = app.name;
+    const status = document.createElement('small'); status.className = app.callable ? 'is-ready' : ''; status.textContent = app.callable ? 'Connected · Ready' : app.available && !app.enabled ? 'Disabled in Codex' : 'Connection needed';
+    row.append(label, status);
+    if (app.available && !app.enabled) {
+      const enable = document.createElement('button'); enable.type = 'button'; enable.className = 'plugin-action'; enable.textContent = 'Enable';
+      enable.addEventListener('click', async () => {
+        enable.disabled = true;
+        try { await api('/api/plugins/app/enable', { method: 'POST', body: { pluginId: plugin.pluginId, appId: app.id } }); await openPluginSetup(plugin.pluginId, true); }
+        catch (error) { showToast(error.message, 'error'); enable.disabled = false; }
+      }); row.append(enable);
+    } else if (!app.callable && /^https:\/\//i.test(app.installUrl || '')) {
+      const connect = document.createElement('a'); connect.className = 'plugin-action'; connect.href = app.installUrl; connect.target = '_blank'; connect.rel = 'noopener noreferrer'; connect.textContent = 'Connect'; row.append(connect);
+    }
+    panel.append(row);
+  }
+  for (const server of setup.servers) {
+    const row = document.createElement('div'); row.className = 'plugin-connection-row';
+    const label = document.createElement('span'); label.textContent = server.name;
+    const status = document.createElement('small'); status.textContent = server.error || `${server.toolCount} tools · ${server.authStatus === 'notLoggedIn' ? 'Sign-in needed' : 'Available'}`; status.title = status.textContent;
+    row.append(label, status);
+    if (server.authStatus === 'notLoggedIn') {
+      const connect = document.createElement('button'); connect.type = 'button'; connect.className = 'plugin-action'; connect.textContent = 'Sign in';
+      connect.addEventListener('click', async () => {
+        connect.disabled = true;
+        try { const result = await api('/api/plugins/connect', { method: 'POST', body: { pluginId: plugin.pluginId, serverName: server.name } }); if (!/^https:\/\//i.test(result.authorizationUrl || '')) throw new Error('This provider returned an unsupported sign-in URL.'); window.open(result.authorizationUrl, '_blank', 'noopener'); }
+        catch (error) { showToast(error.message, 'error'); } finally { connect.disabled = false; }
+      }); row.append(connect);
+    }
+    panel.append(row);
+  }
+  const summary = document.createElement('small'); summary.textContent = `${setup.skills.length} skills${!setup.apps.length && !setup.servers.length ? ' · No additional account connection required' : ''}`; panel.append(summary);
+  const actions = document.createElement('div'); actions.className = 'plugin-setup-actions';
+  const refresh = document.createElement('button'); refresh.type = 'button'; refresh.className = 'plugin-action'; refresh.textContent = 'Refresh connections'; refresh.addEventListener('click', () => void openPluginSetup(plugin.pluginId, true));
+  const use = document.createElement('button'); use.type = 'button'; use.className = 'plugin-action'; use.textContent = 'Use in chat'; use.disabled = !plugin.enabled || state.models.find((model) => model.id === state.modelId)?.providerId === 'anthropic';
+  if (use.disabled) use.title = 'Enable the plugin and choose a Codex-backed model to use it.';
+  use.addEventListener('click', () => {
+    const token = '@' + plugin.name;
+    const input = $('#prompt-input'); input.value = (input.value ? input.value.trimEnd() + ' ' : '') + token + ' ';
+    if (!state.composerPluginMentions.some((entry) => entry.pluginId === plugin.pluginId)) state.composerPluginMentions.push({ pluginId: plugin.pluginId, token });
+    input.focus(); resizeComposer();
+  }); actions.append(refresh, use); panel.append(actions);
+  return panel;
+}
+
+async function openPluginSetup(pluginId, refresh = false) {
+  state.plugins.setupOpen = pluginId;
+  state.plugins.setupDetails ||= new Map();
+  state.plugins.setupDetails.delete(pluginId);
+  renderPluginManager();
+  try {
+    const result = await api(`/api/plugins/setup?pluginId=${encodeURIComponent(pluginId)}${refresh ? '&refresh=1' : ''}`);
+    state.plugins.setupDetails.set(pluginId, result);
+  } catch (error) { state.plugins.setupDetails.set(pluginId, { error: error.message }); }
+  renderPluginManager();
 }
 
 async function loadPluginView({ append = false, force = false } = {}) {
@@ -3743,7 +4020,7 @@ async function addPluginMarketplace(event) {
 function getPluginMentionContext() {
   const textarea = $('#prompt-input');
   const model = state.models.find((item) => item.id === state.modelId);
-  if (model?.providerId && model.providerId !== 'openai') return null;
+  if (model?.providerId === 'anthropic') return null;
   const beforeCursor = textarea.value.slice(0, textarea.selectionStart);
   const match = /(?:^|\s)@([\w.-]*)$/.exec(beforeCursor);
   if (!match) return null;
@@ -4316,6 +4593,11 @@ $('#plugin-list').addEventListener('click', (event) => {
   const button = event.target.closest('[data-plugin-action]');
   if (!button || button.disabled) return;
   const action = button.dataset.pluginAction;
+  if (action === 'setup') {
+    if (state.plugins.setupOpen === button.dataset.pluginId) { state.plugins.setupOpen = ''; renderPluginManager(); }
+    else void openPluginSetup(button.dataset.pluginId);
+    return;
+  }
   if (action === 'marketplace-remove') void runPluginAction(action, '', { name: button.dataset.marketplaceName });
   else void runPluginAction(action, button.dataset.pluginId, { enabled: button.dataset.enabled === 'true' });
 });
@@ -4353,7 +4635,7 @@ $('#agent-assign-form').addEventListener('keydown', (event) => {
 });
 $('.workspace-tool-tabs').addEventListener('keydown', (event) => {
   if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
-  const buttons = Array.from(event.currentTarget.querySelectorAll('button'));
+  const buttons = Array.from(event.currentTarget.querySelectorAll('button')).filter((button) => !button.hidden && !button.disabled);
   const index = buttons.indexOf(document.activeElement);
   if (index < 0) return;
   event.preventDefault();
@@ -4362,9 +4644,10 @@ $('.workspace-tool-tabs').addEventListener('keydown', (event) => {
 });
 document.addEventListener('keydown', (event) => {
   if (!(event.ctrlKey || event.metaKey) || !event.shiftKey || event.altKey) return;
-  const index = ['Digit1', 'Digit2', 'Digit3', 'Digit4'].indexOf(event.code);
+  const index = ['Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5'].indexOf(event.code);
   if (index < 0 || (index < 3 && !state.workspace) || $$('.modal-backdrop').some((modal) => !modal.hidden)) return;
   event.preventDefault();
+  if (index === 4) { setBrowserMode(!state.browser.active); return; }
   const tab = ['files', 'changes', 'agents', 'plugins'][index];
   const wasClosed = $('.app-shell').classList.contains('context-hidden') || state.activeContextTab !== tab;
   setContextTab(tab, { toggle: true });

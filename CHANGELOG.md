@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.0.26
+
+- Added plugin setup panels with connected-app callable status, connection links, enablement, and MCP OAuth login.
+- Added plugin form and URL sign-in requests, and connected-app mentions for Vercel and other Codex plugins, including external API sessions using the Codex runtime.
+- Made the browser MCP configuration additive so existing MCP servers remain available.
+- Added a browser panel alongside chat with resizing, expansion, live status, rounded native viewport, and smoother scrolling and dragging.
+- Fixed browser startup, native wheel direction, drag button state, typing completion, and repeated forced switching away from chat.
+- Checked real Electron clicks, typing, dragging, scrolling, screenshot sizing, browser visibility, Vercel connection status, and plugin form rendering.
+
+## 1.0.25
+
+- Added a visible in-app browser to the Windows desktop app with address bar, navigation controls, and a persistent browser profile.
+- Connected Codex and Claude computer-use tools to that same browser so their navigation, screenshots, clicks, typing, and scrolling are visible in Forge.
+- Kept isolated Chromium browser tools for the browser-based Forge workflow.
+
 ## 1.0.24
 
 - Added a Codex-synced Plugins manager for installed plugins, discovery, enablement, and marketplace sources.
