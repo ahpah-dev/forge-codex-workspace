@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.30
+
+- Prevented custom providers from exposing text-form pseudo tool calls as assistant output; Forge reports a clear provider compatibility error and never executes unstructured tool text.
+- Added provider guidance to use only advertised structured function calls.
+
 ## 1.0.29
 
 - Improved custom Chat Completions tool calling by preserving strict schemas, named and restricted tool choices, and parallel-call settings. Added support for non-streaming responses and legacy function-call streams while keeping tool execution inside the Codex runtime.

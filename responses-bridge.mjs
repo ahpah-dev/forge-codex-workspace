@@ -41,6 +41,7 @@ export function toChatRequest(input) {
   }
   const messages = [];
   if (input.instructions) messages.push({ role: 'system', content: String(input.instructions) });
+  if (tools.length) messages.push({ role: 'system', content: 'Use only the structured function-calling interface and the tools listed in this request. Never print tool-call markup such as <tool_call> or raw function names such as functions.* in assistant text. If a needed tool is unavailable, explain that plainly instead of inventing a tool call.' });
   if (shell) messages.push({ role: 'system', content: 'Only call tools actually listed in this request. Use forge_write_file and forge_edit_file when provided to save files, or the available shell tool. Do not invent apply_patch calls when it is absent. A successful tool result confirms a save; text describing code does not save it. Verify saved files before claiming completion. Free-form tools exposed as JSON require their exact original input in the input string.' });
   const items = typeof input.input === 'string' ? [{ role: 'user', content: input.input }] : input.input || [];
   for (const item of items) {
@@ -192,6 +193,15 @@ function normalizeChatChoice(choice, legacyCallId, inferFinishReason = false) {
   };
 }
 
+function toolMarkerPrefixLength(value) {
+  const marker = '<tool_call>';
+  const lower = value.toLowerCase();
+  for (let size = Math.min(marker.length - 1, lower.length); size > 0; size -= 1) {
+    if (marker.startsWith(lower.slice(-size))) return size;
+  }
+  return 0;
+}
+
 export async function* chatChunks(responseOrBody) {
   const legacyCallId = 'call_' + randomUUID().replaceAll('-', '');
   const contentType = responseOrBody?.headers?.get?.('content-type')?.toLowerCase() || '';
@@ -253,6 +263,7 @@ export async function bridgeResponses({ input, res, router, signal }) {
   let message = null;
   let finishReason = null;
   let usage = {};
+  let pendingDisplayText = '';
   const envelope = (status) => ({ id, object: 'response', created_at, model: input.model, status, output, usage: {
     input_tokens: usage.prompt_tokens || 0, output_tokens: usage.completion_tokens || 0,
     total_tokens: usage.total_tokens || 0, input_tokens_details: { cached_tokens: 0 }, output_tokens_details: { reasoning_tokens: 0 },
@@ -261,6 +272,17 @@ export async function bridgeResponses({ input, res, router, signal }) {
   function send(type, value = {}) {
     if (res.destroyed || signal?.aborted) throw new Error('The task was stopped.');
     res.write(`event: ${type}\ndata: ${JSON.stringify({ type, sequence_number: sequence++, ...value })}\n\n`);
+  }
+  function emitText(delta) {
+    if (!delta) return;
+    if (!message) {
+      message = { id: 'msg_' + randomUUID(), type: 'message', role: 'assistant', status: 'in_progress', content: [{ type: 'output_text', text: '', annotations: [] }] };
+      output.push(message);
+      send('response.output_item.added', { output_index: output.indexOf(message), item: message });
+      send('response.content_part.added', { item_id: message.id, output_index: output.indexOf(message), content_index: 0, part: { type: 'output_text', text: '', annotations: [] } });
+    }
+    message.content[0].text += delta;
+    send('response.output_text.delta', { item_id: message.id, output_index: output.indexOf(message), content_index: 0, delta });
   }
   send('response.created', { response: envelope('in_progress') });
   send('response.in_progress', { response: envelope('in_progress') });
@@ -283,14 +305,17 @@ export async function bridgeResponses({ input, res, router, signal }) {
         const delta = choice.delta || {};
         if (delta.content) {
           segmentText += delta.content;
-          if (!message) {
-            message = { id: 'msg_' + randomUUID(), type: 'message', role: 'assistant', status: 'in_progress', content: [{ type: 'output_text', text: '', annotations: [] }] };
-            output.push(message);
-            send('response.output_item.added', { output_index: output.indexOf(message), item: message });
-            send('response.content_part.added', { item_id: message.id, output_index: output.indexOf(message), content_index: 0, part: { type: 'output_text', text: '', annotations: [] } });
+          pendingDisplayText += delta.content;
+          const markerIndex = pendingDisplayText.toLowerCase().indexOf('<tool_call>');
+          if (markerIndex >= 0) {
+            throw new Error(`${route.name} returned a text-form tool call instead of a structured function call. Forge did not execute it. Choose a model/provider that supports Chat Completions tool calling.`);
           }
-          message.content[0].text += delta.content;
-          send('response.output_text.delta', { item_id: message.id, output_index: output.indexOf(message), content_index: 0, delta: delta.content });
+          const possibleMarker = toolMarkerPrefixLength(pendingDisplayText);
+          const safeLength = pendingDisplayText.length - possibleMarker;
+          if (safeLength > 0) {
+            emitText(pendingDisplayText.slice(0, safeLength));
+            pendingDisplayText = pendingDisplayText.slice(safeLength);
+          }
         }
         for (const call of delta.tool_calls || []) {
           let pending = calls.get(call.index);
@@ -301,6 +326,9 @@ export async function bridgeResponses({ input, res, router, signal }) {
         }
       }
       for (const key of ['prompt_tokens', 'completion_tokens', 'total_tokens']) usage[key] = (usage[key] || 0) + Number(segmentUsage[key] || 0);
+      if (pendingDisplayText.length >= 5 && toolMarkerPrefixLength(pendingDisplayText) === pendingDisplayText.length) {
+        throw new Error(`${route.name} stopped in the middle of text-form tool-call markup. Forge did not execute it. Choose a model/provider that supports Chat Completions tool calling.`);
+      }
       if (finishReason !== 'length') break;
       if (recovery >= 2) throw new Error(`${route.name} reached its output limit after two automatic recovery attempts. Partial text was retained; unfinished tool calls were not executed. Retry with a smaller task or a model with a larger output budget.`);
       const truncatedTools = calls.size > 0;
@@ -319,6 +347,7 @@ export async function bridgeResponses({ input, res, router, signal }) {
       currentChunks = chatChunks(opened.response);
     }
     if (!finishReason) throw new Error(`${route.name} disconnected before finishing. Partial output was retained; no tools were replayed.`);
+    if (pendingDisplayText) { emitText(pendingDisplayText); pendingDisplayText = ''; }
     if (message) {
       message.status = 'completed';
       send('response.output_text.done', { item_id: message.id, output_index: output.indexOf(message), content_index: 0, text: message.content[0].text });

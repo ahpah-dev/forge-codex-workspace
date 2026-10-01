@@ -76,9 +76,10 @@ test('adapter retains namespace functions, tool outputs and exact free-form tool
   ] };
   const { request: translated, toolMap } = toChatRequest(input);
   assert.equal(translated.messages[0].role, 'system');
-  assert.equal(translated.messages[2].tool_calls[0].function.name, 'functions__read_file');
-  assert.equal(translated.messages[3].tool_call_id, 'c1');
-  assert.equal(JSON.parse(translated.messages[4].tool_calls[0].function.arguments).input, '*** exact patch ***');
+  assert.equal(translated.messages.find((message) => message.role === 'assistant').tool_calls[0].function.name, 'functions__read_file');
+  assert.equal(translated.messages.find((message) => message.role === 'tool').tool_call_id, 'c1');
+  const patchCall = translated.messages.filter((message) => message.role === 'assistant').find((message) => message.tool_calls?.[0]?.function.name === 'functions__apply_patch');
+  assert.equal(JSON.parse(patchCall.tool_calls[0].function.arguments).input, '*** exact patch ***');
   assert.equal(toolMap.get('functions__apply_patch').custom, true);
 });
 
@@ -92,6 +93,7 @@ test('adapter preserves strict schemas, named tool choice and parallel-call sett
   assert.equal(request.tools[0].function.strict, true);
   assert.deepEqual(request.tool_choice, { type: 'function', function: { name: 'read_file' } });
   assert.equal(request.parallel_tool_calls, true);
+  assert.match(request.messages.find((message) => message.role === 'system').content, /structured function-calling interface/i);
 });
 
 test('custom Chat Completions providers receive Codex tools and parallel-call settings', async () => {
@@ -198,6 +200,21 @@ test('bridge adapts legacy streamed function_call responses', async () => {
   assert.match(call.call_id, /^call_/);
   assert.equal(call.name, 'read_file');
   assert.deepEqual(JSON.parse(call.arguments), { path: 'a' });
+});
+
+test('bridge hides and rejects split text-form tool-call markup', async () => {
+  const res = sink();
+  const response = stream([
+    { choices: [{ delta: { content: '<tool_ca' } }] },
+    { choices: [{ delta: { content: 'll>functions.send_user_message_async({"text":"x"})' }, finish_reason: 'stop' }] },
+  ]);
+  await bridgeResponses({ input: { model: 'custom', input: 'Do the task', tools: [{ type: 'function', name: 'read_file' }] }, res,
+    router: { openCompletion: async () => ({ response, route: { name: 'Custom provider' } }) } });
+  const serialized = res.output;
+  assert.doesNotMatch(serialized, /<tool_call>/i);
+  assert.doesNotMatch(serialized, /functions\.send_user_message_async/);
+  assert.match(serialized, /Forge did not execute it/);
+  assert.equal(events(res).at(-1).type, 'response.failed');
 });
 
 test('SSE quota error before any output switches providers safely', async () => {
