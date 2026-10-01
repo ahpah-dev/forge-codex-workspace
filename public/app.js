@@ -26,6 +26,7 @@ const state = {
   pendingImages: [],
   messageEditTarget: null,
   activeTurnId: null,
+  turnStartedAt: null,
   activityStatus: 'Starting task',
   isBusy: false,
   pendingSend: false,
@@ -2215,6 +2216,26 @@ function renderMessage(message) {
     content.append(body);
   } else content.innerHTML = message.text ? renderMarkdown(message.text) : '';
   wrapper.append(content);
+  if (message.completionFinished) {
+    const completion = document.createElement('div');
+    completion.className = `turn-completion${message.animateCompletion ? ' just-finished' : ''}`;
+    completion.setAttribute('role', 'status');
+    const durationMs = message.completionDurationMs;
+    const totalSeconds = durationMs === null ? 0 : Math.round(durationMs / 1000);
+    const durationText = durationMs === null ? '' : durationMs < 1000 ? 'under 1s' : totalSeconds < 60
+      ? `${totalSeconds}s`
+      : `${Math.floor(totalSeconds / 60)}m ${totalSeconds % 60}s`;
+    const label = durationMs === null ? 'Finished' : `Finished in ${durationText}`;
+    completion.setAttribute('aria-label', `Task completed. ${label}.`);
+    const mark = createOpenAIMark();
+    mark.classList.add('turn-completion-mark');
+    mark.setAttribute('aria-hidden', 'true');
+    const copy = document.createElement('span');
+    copy.textContent = label;
+    completion.append(mark, copy);
+    wrapper.append(completion);
+    message.animateCompletion = false;
+  }
   return wrapper;
 }
 
@@ -2695,6 +2716,7 @@ function handleCodexEvent(event) {
     if (!state.threadId && state.pendingSend) state.threadId = params.threadId;
     if (state.threadId && params.threadId !== state.threadId) return;
     state.activeTurnId = params.turn?.id || params.turnId || state.activeTurnId;
+    state.turnStartedAt ??= Date.now();
     const latestPrompt = [...state.messages].reverse().find((message) => message.role === 'user')?.text;
     setActivityStatus(latestPrompt ? 'Starting · ' + activityText(latestPrompt, 76) : 'Inspecting the project');
     state.isBusy = true;
@@ -2703,9 +2725,12 @@ function handleCodexEvent(event) {
   }
   if (method === 'turn/completed' || method === 'turn/failed' || method === 'turn/interrupted') {
     if (state.threadId && params.threadId !== state.threadId) return;
+    const turnId = params.turn?.id || state.activeTurnId;
+    const startedAt = state.turnStartedAt;
     state.isBusy = false;
     state.pendingSend = false;
     state.activeTurnId = null;
+    state.turnStartedAt = null;
     state.activityStatus = 'Ready for your next task';
     state.approvals = state.approvals.filter((request) => request.params?.threadId !== state.threadId);
     for (const message of state.messages) if (message.role === 'assistant' && message.turnId === params.turn?.id) message.pending = false;
@@ -2715,6 +2740,13 @@ function handleCodexEvent(event) {
       state.messages.push({ role: 'error', text: typeof errorText === 'string' ? errorText : JSON.stringify(errorText) });
     } else if (method === 'turn/failed') {
       state.messages.push({ role: 'error', text: 'Codex could not complete this task.' });
+    } else {
+      const finalMessage = [...state.messages].reverse().find((message) => message.role === 'assistant' && (!turnId || !message.turnId || message.turnId === turnId));
+      if (finalMessage && !finalMessage.completionFinished) {
+        finalMessage.completionFinished = true;
+        finalMessage.completionDurationMs = startedAt ? Math.max(0, Date.now() - startedAt) : null;
+        finalMessage.animateCompletion = true;
+      }
     }
     renderSurface();
     state.treeCache.clear();
@@ -2923,6 +2955,7 @@ function applyThreadResult(result, { keepScroll = false } = {}) {
   for (const event of (result.messages || []).filter((message) => message.role === 'agent-event')) upsertAgentItem(event.item, event.turnId);
   state.approvals = [];
   state.activeTurnId = null;
+  state.turnStartedAt = null;
   state.isBusy = false;
   state.pendingSend = false;
   state.diff = '';
@@ -3065,6 +3098,7 @@ async function sendMessage(textOverride, { readOnlyOverride, routingText, replac
   }
   state.pendingSend = true;
   state.isBusy = true;
+  state.turnStartedAt = Date.now();
   state.activityStatus = automaticRoute ? `Auto · ${selectedModel.name} · ${automaticRoute.reason}` : 'Starting task';
   const userMessage = { id: `user-${Date.now()}`, role: 'user', text, images: selectedImages, threadId: state.threadId };
   state.messages.push(userMessage);
@@ -3107,6 +3141,7 @@ async function sendMessage(textOverride, { readOnlyOverride, routingText, replac
     state.isBusy = false;
     state.pendingSend = false;
     state.activeTurnId = null;
+    state.turnStartedAt = null;
     state.messages = state.messages.filter((message) => message.role !== 'assistant' || message.turnId || message.text);
     state.messages.push({ role: 'error', text: error.message });
     renderSurface();

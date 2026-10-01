@@ -76,6 +76,12 @@ html[data-composer-shape="pill"] .send-button:disabled { transform: none; }
 .idea-card small { color: var(--muted); font-weight: 600; letter-spacing: .08em; }
 .user-message { border-color: var(--surface-border); border-radius: 16px 16px 6px 16px; }
 .assistant-message h1, .assistant-message h2, .assistant-message h3 { letter-spacing: -.02em; line-height: 1.35; }
+.turn-completion { display: flex; align-items: center; width: fit-content; margin-top: 14px; gap: 7px; color: var(--muted); font-size: calc(10px * var(--ui-scale)); font-weight: 540; }
+.turn-completion-mark { width: 15px; height: 15px; flex: 0 0 auto; color: var(--accent); }
+.turn-completion.just-finished { animation: completion-arrive .28s cubic-bezier(.2,.8,.2,1) both; }
+.turn-completion.just-finished .turn-completion-mark { animation: completion-spark .85s cubic-bezier(.2,.8,.2,1) both; }
+@keyframes completion-arrive { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes completion-spark { 0% { transform: scale(.72) rotate(-22deg); filter: drop-shadow(0 0 0 transparent); } 52% { transform: scale(1.18) rotate(10deg); filter: drop-shadow(0 0 5px color-mix(in srgb, var(--accent) 40%, transparent)); } 100% { transform: scale(1) rotate(0); filter: drop-shadow(0 0 0 transparent); } }
 .activity-card { border-color: var(--surface-border); border-radius: 12px; box-shadow: var(--surface-shadow); }
 .activity-card:hover { border-color: color-mix(in srgb, var(--muted) 22%, var(--line)); box-shadow: var(--surface-shadow); }
 .activity-card.running { border-color: color-mix(in srgb, var(--accent) 24%, var(--line)); }
@@ -112,6 +118,7 @@ html[data-composer-shape="pill"] .send-button:disabled { transform: none; }
   html[data-composer-shape="pill"] .send-button { right: 8px; bottom: 8px; width: 34px; height: 34px; }
 }
 @media (prefers-reduced-motion: reduce) {
+  .turn-completion.just-finished, .turn-completion.just-finished .turn-completion-mark { animation: none; }
   .icon-button, .quiet-button, .topbar-button, .new-task-button, .session-row,
   .model-picker-trigger, .effort-trigger, .theme-preset { transition: none; }
 }
