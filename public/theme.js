@@ -27,8 +27,8 @@
   const presets = {
     linen: { name: 'Linen', colors: baseColors },
     porcelain: { name: 'Porcelain', colors: { ...baseColors, page: '#f6f8fb', sidebar: '#edf1f6', hover: '#e7edf5', user: '#edf2fa', code: '#f1f4f8', ink: '#263246', muted: '#6b7990', line: '#dce3ed', accent: '#5c72b9', brand: '#5c72b9' } },
-    graphite: { name: 'Graphite', colors: { ...baseColors, page: '#1a1c1f', sidebar: '#16181b', paper: '#23262b', field: '#1d2025', hover: '#2d3239', user: '#2b3037', code: '#191c21', ink: '#edf0f3', muted: '#a0a8b3', line: '#353b44', accent: '#d39b7e', onAccent: '#201813', brand: '#a5b1ed', success: '#8bbf9a', danger: '#eb9189', astra: '#bd9ce8', sol: '#e2b26b', luna: '#a2b7ee', provider: '#c09de5', nvidia: '#a5c775' } },
-    midnight: { name: 'Midnight', colors: { ...baseColors, page: '#141b29', sidebar: '#101623', paper: '#1c2535', field: '#172031', hover: '#29354b', user: '#27344b', code: '#111a29', ink: '#e7edf9', muted: '#9eacc5', line: '#33425b', accent: '#9aaee8', onAccent: '#14213d', brand: '#9aaee8', success: '#8cc8b1', danger: '#ed9d9d', astra: '#c6abea', sol: '#e9bd77', luna: '#a4c5ff', provider: '#c6abea', nvidia: '#a8c786' } },
+    graphite: { name: 'Graphite', colors: { ...baseColors, page: '#1c1f22', sidebar: '#151719', paper: '#25282b', field: '#1e2124', hover: '#303438', user: '#2b2f33', code: '#171a1d', ink: '#f0f1f2', muted: '#a6aaad', line: '#3a4045', accent: '#e09a78', onAccent: '#241912', brand: '#b4b8ec', success: '#91c7a0', danger: '#ee938a', astra: '#c7a3ea', sol: '#ebc27b', luna: '#b0c2ef', provider: '#c6a5e6', nvidia: '#afd080' } },
+    midnight: { name: 'Midnight', colors: { ...baseColors, page: '#0d1220', sidebar: '#090e19', paper: '#151d2d', field: '#111929', hover: '#212d43', user: '#1a2840', code: '#0a1322', ink: '#eef2ff', muted: '#a1b0ca', line: '#293750', accent: '#aaa1ff', onAccent: '#17152b', brand: '#aaa1ff', success: '#83d5bc', danger: '#ffa0a0', astra: '#d0b5ff', sol: '#f0c878', luna: '#abcaff', provider: '#cfb5ff', nvidia: '#aada8b' } },
   };
   const defaults = { version: 1, preset: 'linen', colors: { ...baseColors }, fonts: { ui: 'Anthropic Sans', chat: 'Anthropic Sans', code: 'Consolas' }, customFonts: { ui: '', chat: '', code: '' }, uiScale: 100, chatSize: 15, codeSize: 12, lineHeight: 1.7, pattern: 'none', composerShape: 'rounded', composerHeight: 0 };
   const fontChoices = ['system', 'Anthropic Sans', 'Segoe UI', 'Arial', 'Calibri', 'Verdana', 'Trebuchet MS', 'Georgia', 'Cambria', 'Times New Roman', 'Consolas', 'Cascadia Code', 'Courier New', 'custom', 'uploaded'];
@@ -42,7 +42,8 @@
     const result = JSON.parse(JSON.stringify(defaults));
     if (!input || typeof input !== 'object') return result;
     result.preset = Object.hasOwn(presets, input.preset) ? input.preset : 'custom';
-    for (const [key] of colors) if (/^#[0-9a-f]{6}$/i.test(input.colors?.[key] || '')) result.colors[key] = input.colors[key].toLowerCase();
+    const savedColors = result.preset === 'custom' ? input.colors : presets[result.preset].colors;
+    for (const [key] of colors) if (/^#[0-9a-f]{6}$/i.test(savedColors?.[key] || '')) result.colors[key] = savedColors[key].toLowerCase();
     for (const [slot] of fontSlots) {
       if (fontChoices.includes(input.fonts?.[slot])) result.fonts[slot] = input.fonts[slot];
       if (typeof input.customFonts?.[slot] === 'string') result.customFonts[slot] = input.customFonts[slot].trim().slice(0, 100);

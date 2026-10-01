@@ -24,7 +24,7 @@ File edits appear in expandable code cards with line numbers and additions/remov
 
 Download the latest Windows x64 installer from [GitHub Releases](https://github.com/davidegeric-cloud/forge-codex-workspace/releases/latest). Run the installer, then launch Forge from the Start menu or desktop shortcut. Sign in to Codex once in the Codex app or Codex CLI; Forge uses that saved local account automatically.
 
-To build the installer yourself, use Node.js 18 or newer on Windows x64, run `npm install`, then `npm run dist:win`. The installer is written to `release/Forge-Setup-1.0.27-x64.exe`. The desktop app bundles its Codex runtime and does not need a global Node.js install.
+To build the installer yourself, use Node.js 18 or newer on Windows x64, run `npm install`, then `npm run dist:win`. The installer is written to `release/Forge-Setup-1.0.28-x64.exe`. The desktop app bundles its Codex runtime and does not need a global Node.js install.
 
 ## Start from source
 
@@ -77,7 +77,7 @@ Assistant Markdown renders local workspace file links as compact clickable chips
 
 ## Browser verification
 
-The Windows desktop app includes a visible in-app browser. Codex and Claude computer-use tools control that same browser, so you can watch pages open and see screenshots, clicks, typing, and scrolling in Forge. Browser sessions use a persistent Forge browser profile. The browser-based version uses its bundled isolated Chromium browser.
+The Windows desktop app provides host-level computer-use tools for Codex, Claude, and configured Codex-runtime models. They can inspect screenshots and use the real desktop pointer and keyboard in other Windows apps, with screenshot-based coordinates. Ask the model to inspect the screen before it acts. Browser-specific tasks can still use Forge's visible in-app browser, which has a persistent profile. The browser-based version uses its bundled isolated Chromium browser and does not control the Windows desktop.
 
 For source builds, run `npm run browser:install` to install the pinned browser runtime. Windows packaging runs this step automatically.
 

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, WebContentsView, dialog, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, WebContentsView, desktopCapturer, dialog, ipcMain, screen, shell } = require('electron');
 const { fork, spawn } = require('node:child_process');
 const path = require('node:path');
 const { existsSync } = require('node:fs');
@@ -10,6 +10,12 @@ if (process.env.FORGE_USER_DATA_DIR) app.setPath('userData', path.resolve(proces
 let serverProcess;
 let mainWindow;
 let browserView;
+let forgeResourceRoot;
+let computerHost;
+let computerHostBuffer = '';
+let computerHostRequestId = 0;
+const computerHostPending = new Map();
+const desktopScreenshotSizes = new Map();
 let browserAttached = false;
 let browserVisible = false;
 let browserState = { url: '', title: '', loading: false, canGoBack: false, canGoForward: false, error: '' };
@@ -17,6 +23,7 @@ const browserLayoutWaiters = new Set();
 let browserCommandQueue = Promise.resolve();
 let browserPointer = { x: 20, y: 20 };
 let browserActivityTimer;
+let desktopCommandQueue = Promise.resolve();
 let stopping = false;
 let readyTimer;
 
@@ -98,6 +105,7 @@ else {
 
 async function startForge() {
   const resourceRoot = app.isPackaged ? path.join(process.resourcesPath, 'forge') : __dirname;
+  forgeResourceRoot = resourceRoot;
   const dataRoot = path.join(app.getPath('userData'), 'data');
   const codexExecutable = app.isPackaged
     ? path.join(process.resourcesPath, 'codex', 'vendor', 'x86_64-pc-windows-msvc', 'bin', 'codex.exe')
@@ -130,9 +138,9 @@ async function startForge() {
   serverProcess.stderr.setEncoding('utf8');
   serverProcess.on('message', (message) => {
     if (message?.type !== 'forge:computer-use' || !message.id) return;
-    runBrowserCommand(message.action, message.params || {}).then(
+    runComputerUseCommand(message.action, message.params || {}).then(
       (result) => serverProcess?.send({ type: 'forge:computer-use-result', id: message.id, result }),
-      (error) => serverProcess?.send({ type: 'forge:computer-use-result', id: message.id, error: error.message || 'The in-app browser action failed.' }),
+      (error) => serverProcess?.send({ type: 'forge:computer-use-result', id: message.id, error: error.message || 'The computer-use action failed.' }),
     );
   });
   serverProcess.stdout.on('data', (chunk) => {
@@ -314,6 +322,224 @@ async function markBrowserPointer(x, y, pressed = false) {
     pointer.style.left = ${x} + 'px'; pointer.style.top = ${y} + 'px'; pointer.style.opacity = '1'; pointer.style.scale = ${pressed ? 0.8 : 1} + '';
     clearTimeout(window.__forgePointerFade); window.__forgePointerFade = setTimeout(() => { pointer.style.opacity = '0'; }, 900);
   })()`).catch(() => {});
+}
+
+function rejectComputerHostRequests(error) {
+  for (const [id, pending] of computerHostPending) {
+    computerHostPending.delete(id);
+    clearTimeout(pending.timeout);
+    pending.reject(error);
+  }
+}
+
+function startComputerHost() {
+  if (computerHost && computerHost.exitCode === null) return computerHost;
+  if (process.platform !== 'win32') throw new Error('Native desktop controls are currently available in the Windows Forge app.');
+  const script = path.join(forgeResourceRoot || __dirname, 'computer-use-host.ps1');
+  const host = spawn(process.env.FORGE_POWERSHELL_EXE || 'powershell.exe', [
+    '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script,
+  ], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+  computerHost = host;
+  computerHostBuffer = '';
+  host.stdout.setEncoding('utf8');
+  host.stdout.on('data', (chunk) => {
+    computerHostBuffer += chunk;
+    if (computerHostBuffer.length > 2 * 1024 * 1024) {
+      host.kill();
+      rejectComputerHostRequests(new Error('The native desktop helper returned too much data.'));
+      return;
+    }
+    let newline;
+    while ((newline = computerHostBuffer.indexOf('\n')) >= 0) {
+      const line = computerHostBuffer.slice(0, newline).trim();
+      computerHostBuffer = computerHostBuffer.slice(newline + 1);
+      if (!line) continue;
+      let response;
+      try { response = JSON.parse(line); } catch { continue; }
+      const pending = computerHostPending.get(String(response.id));
+      if (!pending) continue;
+      computerHostPending.delete(String(response.id));
+      clearTimeout(pending.timeout);
+      if (response.error) pending.reject(new Error(String(response.error)));
+      else pending.resolve(response.result || {});
+    }
+  });
+  host.stderr.on('data', () => {});
+  host.on('error', (error) => {
+    if (computerHost === host) computerHost = null;
+    rejectComputerHostRequests(new Error(`Could not start the Windows desktop controller: ${error.message}`));
+  });
+  host.on('exit', (code) => {
+    if (computerHost === host) computerHost = null;
+    if (computerHostPending.size) rejectComputerHostRequests(new Error(`The Windows desktop controller stopped${code === null ? '' : ` (exit ${code})`}.`));
+  });
+  return host;
+}
+
+function sendComputerHost(action, params = {}) {
+  const host = startComputerHost();
+  const id = String(++computerHostRequestId);
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      computerHostPending.delete(id);
+      reject(new Error('The Windows desktop controller did not respond in time.'));
+    }, 20000);
+    computerHostPending.set(id, { resolve, reject, timeout });
+    try { host.stdin.write(`${JSON.stringify({ id, action, ...params })}\n`); }
+    catch (error) {
+      computerHostPending.delete(id);
+      clearTimeout(timeout);
+      reject(error);
+    }
+  });
+}
+
+function getDesktopDisplay(displayId) {
+  const displays = screen.getAllDisplays();
+  const display = displayId === undefined || displayId === null || displayId === ''
+    ? screen.getPrimaryDisplay()
+    : displays.find((candidate, index) => String(candidate.id) === String(displayId) || String(index) === String(displayId));
+  if (!display) throw new Error('That display is no longer connected. Take a fresh computer screenshot and try again.');
+  return display;
+}
+
+async function captureDesktopDisplay(displayId) {
+  const display = getDesktopDisplay(displayId);
+  const scale = Number(display.scaleFactor) || 1;
+  const thumbnailSize = {
+    width: Math.max(1, Math.min(1920, Math.round(display.bounds.width * scale))),
+    height: Math.max(1, Math.min(1200, Math.round(display.bounds.height * scale))),
+  };
+  const sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize });
+  const source = sources.find((item) => item.display_id === String(display.id));
+  if (!source || source.thumbnail.isEmpty()) throw new Error('Forge could not capture that display. Check Windows screen-capture permissions and try again.');
+  const size = source.thumbnail.getSize();
+  desktopScreenshotSizes.set(String(display.id), { width: size.width, height: size.height });
+  return {
+    display,
+    imageBase64: source.thumbnail.toPNG().toString('base64'),
+    imageWidth: size.width,
+    imageHeight: size.height,
+  };
+}
+
+async function desktopPoint(xValue, yValue, displayId) {
+  const display = getDesktopDisplay(displayId);
+  const key = String(display.id);
+  let size = desktopScreenshotSizes.get(key);
+  if (!size) {
+    const capture = await captureDesktopDisplay(key);
+    size = { width: capture.imageWidth, height: capture.imageHeight };
+  }
+  const x = Number(xValue), y = Number(yValue);
+  if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0 || x >= size.width || y >= size.height) {
+    throw new Error(`Use coordinates inside the latest computer screenshot (0–${size.width - 1}, 0–${size.height - 1}).`);
+  }
+  const scale = Number(display.scaleFactor) || 1;
+  return {
+    display,
+    x: Math.round((display.bounds.x + x * display.bounds.width / size.width) * scale),
+    y: Math.round((display.bounds.y + y * display.bounds.height / size.height) * scale),
+  };
+}
+
+const desktopVirtualKeys = {
+  BACKSPACE: 0x08, TAB: 0x09, ENTER: 0x0d, SHIFT: 0x10, CTRL: 0x11, CONTROL: 0x11, ALT: 0x12,
+  PAUSE: 0x13, CAPSLOCK: 0x14, ESC: 0x1b, ESCAPE: 0x1b, SPACE: 0x20, PAGEUP: 0x21, PAGEDOWN: 0x22,
+  END: 0x23, HOME: 0x24, LEFT: 0x25, ARROWLEFT: 0x25, UP: 0x26, ARROWUP: 0x26,
+  RIGHT: 0x27, ARROWRIGHT: 0x27, DOWN: 0x28, ARROWDOWN: 0x28, PRINTSCREEN: 0x2c,
+  INSERT: 0x2d, DELETE: 0x2e, WIN: 0x5b, META: 0x5b, CMD: 0x5b,
+  NUMPAD0: 0x60, NUMPAD1: 0x61, NUMPAD2: 0x62, NUMPAD3: 0x63, NUMPAD4: 0x64,
+  NUMPAD5: 0x65, NUMPAD6: 0x66, NUMPAD7: 0x67, NUMPAD8: 0x68, NUMPAD9: 0x69,
+  MULTIPLY: 0x6a, ADD: 0x6b, SUBTRACT: 0x6d, DECIMAL: 0x6e, DIVIDE: 0x6f,
+  NUMLOCK: 0x90, SCROLLLOCK: 0x91, OEM_PLUS: 0xbb, OEM_COMMA: 0xbc, OEM_MINUS: 0xbd,
+  OEM_PERIOD: 0xbe, OEM_SLASH: 0xbf, OEM_TILDE: 0xc0, OEM_LBRACKET: 0xdb, OEM_BACKSLASH: 0xdc,
+  OEM_RBRACKET: 0xdd, OEM_QUOTE: 0xde,
+};
+
+function parseDesktopKeyChord(value) {
+  const names = String(value || '').toUpperCase().split('+').map((part) => part.trim()).filter(Boolean);
+  if (!names.length || names.length > 6) throw new Error('Enter a key or shortcut such as Enter, Ctrl+S, or Alt+Tab.');
+  return names.map((name) => {
+    if (desktopVirtualKeys[name]) return desktopVirtualKeys[name];
+    if (/^[A-Z0-9]$/.test(name)) return name.charCodeAt(0);
+    const functionKey = name.match(/^F([1-9]|1[0-9]|2[0-4])$/);
+    if (functionKey) return 0x70 + Number(functionKey[1]) - 1;
+    throw new Error(`Unsupported desktop key: ${name}.`);
+  });
+}
+
+async function executeDesktopComputerAction(action, params = {}) {
+  if (action === 'computer-state') {
+    const state = await sendComputerHost('state');
+    const displays = screen.getAllDisplays().map((display, index) => ({
+      displayId: String(display.id), index, primary: display.id === screen.getPrimaryDisplay().id,
+      width: Math.round(display.bounds.width * (Number(display.scaleFactor) || 1)),
+      height: Math.round(display.bounds.height * (Number(display.scaleFactor) || 1)),
+      scaleFactor: Number(display.scaleFactor) || 1,
+    }));
+    return { ...state, displays, message: `Foreground window: ${state.foregroundWindow || '(untitled)'}. Cursor: ${state.cursor.x}, ${state.cursor.y}. Displays: ${displays.map((display) => `${display.displayId}${display.primary ? ' (primary)' : ''} ${display.width}×${display.height}`).join('; ')}.` };
+  }
+  if (action === 'computer-screenshot') {
+    const capture = await captureDesktopDisplay(params.displayId);
+    return {
+      imageBase64: capture.imageBase64,
+      mimeType: 'image/png',
+      displayId: String(capture.display.id),
+      imageWidth: capture.imageWidth,
+      imageHeight: capture.imageHeight,
+      message: `Display ${capture.display.id} screenshot, ${capture.imageWidth}×${capture.imageHeight}. Use these image-pixel coordinates for the next computer_use_click, computer_use_move, computer_use_drag, and computer_use_scroll call, and pass displayId ${capture.display.id}.`,
+    };
+  }
+  if (action === 'computer-click' || action === 'computer-move') {
+    const point = await desktopPoint(params.x, params.y, params.displayId);
+    if (action === 'computer-move') {
+      await sendComputerHost('move', { x: point.x, y: point.y });
+      return { message: `Moved the pointer to screenshot coordinate ${params.x}, ${params.y} on display ${point.display.id}.` };
+    }
+    const button = ['left', 'right', 'middle'].includes(String(params.button || 'left').toLowerCase()) ? String(params.button || 'left').toLowerCase() : 'left';
+    const count = Number(params.count) === 2 ? 2 : 1;
+    await sendComputerHost('click', { x: point.x, y: point.y, button, count });
+    return { message: `${count === 2 ? 'Double-clicked' : 'Clicked'} with ${button} button at screenshot coordinate ${params.x}, ${params.y} on display ${point.display.id}.` };
+  }
+  if (action === 'computer-drag') {
+    const start = await desktopPoint(params.fromX, params.fromY, params.displayId);
+    const end = await desktopPoint(params.toX, params.toY, params.displayId);
+    const button = ['left', 'right', 'middle'].includes(String(params.button || 'left').toLowerCase()) ? String(params.button || 'left').toLowerCase() : 'left';
+    await sendComputerHost('drag', { fromX: start.x, fromY: start.y, toX: end.x, toY: end.y, button });
+    return { message: `Dragged from ${params.fromX}, ${params.fromY} to ${params.toX}, ${params.toY} on display ${start.display.id}.` };
+  }
+  if (action === 'computer-scroll') {
+    const hasPoint = params.x !== undefined || params.y !== undefined;
+    let point = { x: -1, y: -1 };
+    if (hasPoint) {
+      if (params.x === undefined || params.y === undefined) throw new Error('Provide both x and y from the current screenshot when choosing where to scroll.');
+      point = await desktopPoint(params.x, params.y, params.displayId);
+    }
+    const horizontal = Math.max(-12, Math.min(12, Math.round(Number(params.horizontal) || 0)));
+    const vertical = Math.max(-12, Math.min(12, Math.round(Number(params.vertical) || 0)));
+    await sendComputerHost('scroll', { x: point.x, y: point.y, horizontal, vertical });
+    return { message: `Scrolled ${vertical > 0 ? 'down' : vertical < 0 ? 'up' : 'horizontally'} ${Math.abs(vertical || horizontal)} wheel steps on the desktop.` };
+  }
+  if (action === 'computer-type') {
+    const text = String(params.text || '');
+    if (!text || text.length > 10000) throw new Error('Type between 1 and 10,000 characters at a time.');
+    await sendComputerHost('type', { text });
+    return { message: `Typed ${text.length} characters into the focused desktop control.` };
+  }
+  if (action === 'computer-press-key') {
+    const keys = parseDesktopKeyChord(params.key);
+    await sendComputerHost('press-keys', { keys });
+    return { message: `Pressed ${String(params.key).toUpperCase()} on the desktop.` };
+  }
+  throw new Error('That computer-use action is not supported by Forge.');
+}
+
+function runComputerUseCommand(action, params = {}) {
+  if (!action.startsWith('computer-')) return runBrowserCommand(action, params);
+  const next = desktopCommandQueue.then(() => executeDesktopComputerAction(action, params));
+  desktopCommandQueue = next.catch(() => {});
+  return next;
 }
 
 function runBrowserCommand(action, params = {}) {
@@ -537,6 +763,10 @@ function stopForge() {
 
 app.on('before-quit', () => {
   if (!stopping && serverProcess && serverProcess.exitCode === null) stopForge();
+});
+app.on('will-quit', () => {
+  computerHost?.kill();
+  rejectComputerHostRequests(new Error('Forge closed before the desktop action finished.'));
 });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') stopForge(); });
 

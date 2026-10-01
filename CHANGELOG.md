@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.28
+
+- Added host-level Windows desktop controls for computer use, including screenshots, pointer movement and clicks, scrolling, keyboard input, and shortcuts across apps.
+- Improved the Graphite and Midnight theme palettes and restored saved built-in themes from their canonical colors.
+
 ## 1.0.27
 
 - Fixed welcome suggestion cards falling behind the composer after resizing or entering full screen by recalculating their position from live layout geometry.
