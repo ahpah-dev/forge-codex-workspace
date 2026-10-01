@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.21
+
+- Made live completion updates describe the actual command, file change, search, browser operation, tool call, or delegated agent task, including useful targets and command exit codes.
+
 ## 1.0.20
 
 - Set Anthropic Sans as the default interface and conversation font, loading the variable font from Anthropic's CDN with system-font fallbacks.

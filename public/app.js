@@ -2331,28 +2331,131 @@ function activityStatusForItem(item) {
   }
 }
 
-function browserActivityLabel(tool, args = {}) {
+function browserActivityLabel(tool, args = {}, completed = false) {
   const name = String(tool || '').split('__').at(-1);
-  const labels = { browser_navigate: 'Opening browser page', browser_snapshot: 'Inspecting browser page', browser_take_screenshot: 'Taking browser screenshot', browser_click: 'Clicking', browser_type: 'Typing into', browser_drag: 'Dragging', browser_mouse_drag_xy: 'Dragging in the browser', browser_console_messages: 'Checking browser console', browser_network_requests: 'Checking browser requests', browser_run_code: 'Verifying browser behavior', browser_evaluate: 'Inspecting browser state', browser_resize: 'Resizing browser viewport', browser_tabs: 'Managing browser tabs', browser_wait_for: 'Waiting for browser update', browser_close: 'Closing browser page' };
-  return (labels[name] || String(name || 'Browser action').replace(/^browser_/, '').replaceAll('_', ' ')) + (args.url ? ' · ' + activityText(args.url, 65) : args.element || args.startElement ? ' · ' + activityText(args.element || args.startElement, 60) : '');
+  const labels = {
+    browser_navigate: ['Opening browser page', 'Opened browser page'],
+    browser_snapshot: ['Inspecting browser page', 'Inspected browser page'],
+    browser_take_screenshot: ['Taking browser screenshot', 'Captured browser screenshot'],
+    browser_click: ['Clicking', 'Clicked'],
+    browser_type: ['Typing into', 'Typed into'],
+    browser_drag: ['Dragging', 'Dragged'],
+    browser_mouse_drag_xy: ['Dragging in the browser', 'Dragged in the browser'],
+    browser_console_messages: ['Checking browser console', 'Checked browser console'],
+    browser_network_requests: ['Checking browser requests', 'Checked browser requests'],
+    browser_run_code: ['Verifying browser behavior', 'Verified browser behavior'],
+    browser_evaluate: ['Inspecting browser state', 'Inspected browser state'],
+    browser_resize: ['Resizing browser viewport', 'Resized browser viewport'],
+    browser_tabs: ['Managing browser tabs', 'Managed browser tabs'],
+    browser_wait_for: ['Waiting for browser update', 'Waited for browser update'],
+    browser_close: ['Closing browser page', 'Closed browser page'],
+  };
+  const action = labels[name]?.[completed ? 1 : 0] || String(name || 'browser action').replace(/^browser_/, '').replaceAll('_', ' ');
+  const target = args.url || args.element || args.startElement || args.selector;
+  return action + (target ? ' · ' + activityText(target, 65) : '');
+}
+
+function activityOutcome(item) {
+  const status = typeof item?.status === 'string' ? item.status : item?.status?.type || '';
+  if (item?.error || Number.isInteger(item?.exitCode) && item.exitCode !== 0 || /fail|error/i.test(status)) return 'Failed';
+  if (/interrupt|declin|cancel|stop/i.test(status)) return 'Stopped';
+  return '';
+}
+
+function fileChangeCompletion(changes = []) {
+  const files = changes.map((change) => ({
+    path: change.path || change.filePath || change.displayPath,
+    kind: String(typeof change.kind === 'string' ? change.kind : change.kind?.type || change.type || '').toLowerCase(),
+  })).filter((change) => change.path);
+  if (!files.length) return 'Applied file changes';
+  const kinds = new Set(files.map(({ kind }) => kind));
+  const verb = kinds.size !== 1 ? 'Changed' : ({
+    add: 'Added', added: 'Added', create: 'Created', created: 'Created',
+    delete: 'Deleted', deleted: 'Deleted', remove: 'Deleted',
+    write: 'Wrote', edit: 'Edited', update: 'Updated', updated: 'Updated', modified: 'Edited',
+    rename: 'Renamed', renamed: 'Renamed',
+  })[files[0].kind] || 'Updated';
+  return verb + ' ' + activityText(files.map(({ path }) => path).join(', '), 80);
+}
+
+function anthropicToolCompletion(item) {
+  const name = String(item.toolName || 'project tool');
+  const input = item.input || {};
+  const file = String(input.file_path || input.path || input.filePath || '').split(/[\\/]/).filter(Boolean).slice(-2).join('/');
+  const path = file ? activityText(file, 66) : '';
+  const query = input.query || input.pattern;
+  switch (name) {
+    case 'Bash': {
+      const command = Array.isArray(input.command) ? input.command.join(' ') : input.command;
+      return 'Ran ' + (activityText(command, 70) || 'terminal command') + (Number.isInteger(item.exitCode) ? ' · exit ' + item.exitCode : '');
+    }
+    case 'Read': return 'Read ' + (path || 'project file');
+    case 'Write': return 'Wrote ' + (path || 'project file');
+    case 'Edit': return 'Edited ' + (path || 'project file');
+    case 'NotebookEdit': return 'Updated notebook ' + (path || 'in the project');
+    case 'Glob': return 'Found files matching ' + activityText(input.pattern || 'the requested pattern', 64);
+    case 'Grep': return 'Searched project files for ' + activityText(query || 'matching text', 64);
+    case 'WebSearch': return 'Searched the web for ' + activityText(input.query || 'relevant references', 64);
+    case 'WebFetch': return 'Read web page ' + activityText(input.url || 'from the requested address', 72);
+    case 'TodoWrite': return 'Updated the task checklist';
+    case 'Agent':
+    case 'Task': return 'Delegated ' + activityText(input.description || input.prompt || 'the requested task', 70);
+    default: {
+      const detail = path || (query ? activityText(query, 58) : '');
+      return 'Completed ' + name + ' tool call' + (detail ? ' · ' + detail : '');
+    }
+  }
 }
 
 function completedActivityStatus(item) {
-  if (item?.type === 'agentMessage') return 'Response complete';
-  if (item?.type === 'commandExecution') {
-    const command = Array.isArray(item.command) ? item.command.join(' ') : item.command;
-    const status = item.exitCode === 0 ? ' · exited successfully' : Number.isInteger(item.exitCode) ? ' · exit ' + item.exitCode : '';
-    return 'Finished ' + (activityText(command, 64) || 'terminal command') + status;
+  const outcome = activityOutcome(item);
+  let action = '';
+  switch (item?.type) {
+    case 'agentMessage': return 'Response ready';
+    case 'commandExecution': {
+      const command = Array.isArray(item.command) ? item.command.join(' ') : item.command;
+      action = 'Ran ' + (activityText(command, 70) || 'terminal command') + (Number.isInteger(item.exitCode) ? ' · exit ' + item.exitCode : '');
+      break;
+    }
+    case 'fileChange': action = fileChangeCompletion(item.changes || []); break;
+    case 'webSearch': action = 'Searched the web' + (item.query ? ' for ' + activityText(item.query, 62) : ''); break;
+    case 'mcpToolCall': {
+      const label = browserActivityLabel(item.tool, item.arguments || {}, !outcome);
+      action = item.server && item.server !== 'forge_browser' ? (outcome ? item.server + ' · ' + label : 'Completed ' + item.server + ' · ' + label) : label;
+      break;
+    }
+    case 'anthropicTool': action = anthropicToolCompletion(item); break;
+    case 'anthropicAgentActivity': {
+      const name = item.name || 'Agent';
+      const task = item.task ? ' · ' + activityText(item.task, 62) : '';
+      action = outcome ? name + ' task' + task : name + ' completed its delegated task' + task;
+      break;
+    }
+    case 'collabAgentToolCall':
+    case 'collab_tool_call':
+    case 'collabToolCall': {
+      const agents = Object.keys(item.agents_states || item.agentsStates || {}).length;
+      action = agents ? 'Coordinated ' + agents + (agents === 1 ? ' helper agent' : ' helper agents') : 'Updated delegated agent work';
+      break;
+    }
+    case 'subAgentActivity':
+    case 'sub_agent_activity': {
+      const kind = String(item.kind || '').replaceAll('_', ' ').trim();
+      action = /complete|finish|ended/i.test(kind) ? 'Agent completed its task' : kind ? 'Agent update · ' + activityText(kind, 58) : 'Updated delegated agent work';
+      break;
+    }
+    case 'reasoning':
+    case 'reasoningSummary': action = 'Finished reviewing the task context'; break;
+    case 'plan': action = 'Updated the task plan'; break;
+    default: {
+      const detail = item?.summary || item?.title || item?.name || item?.toolName || item?.tool || item?.kind;
+      const liveDescription = item?.statusMessage;
+      const type = String(item?.type || '').replace(/([a-z])([A-Z])/g, '$1 $2').replaceAll('_', ' ').trim();
+      const label = activityText(detail || type || 'task step', 76);
+      action = liveDescription ? activityText(liveDescription, 76) : outcome ? label : 'Completed ' + label;
+    }
   }
-  if (item?.type === 'fileChange') {
-    const files = (item.changes || []).map((change) => change.path || change.filePath || change.displayPath).filter(Boolean);
-    return files.length ? 'Updated ' + activityText(files.join(', '), 80) : 'File changes applied';
-  }
-  if (item?.type === 'webSearch') return 'Finished web search' + (item.query ? ' · ' + activityText(item.query, 62) : '');
-  if (item?.type === 'mcpToolCall') return item.error ? 'Browser action failed' : 'Finished · ' + browserActivityLabel(item.tool, item.arguments || {});
-  if (item?.type === 'anthropicTool') return 'Finished ' + (item.toolName || 'project tool');
-  if (item?.type === 'anthropicAgentActivity') return (item.name || 'Agent') + ' finished its task';
-  return 'Finished the current action';
+  return outcome ? outcome + ' · ' + action : action;
 }
 
 function renderMessages(forceTop = false) {
