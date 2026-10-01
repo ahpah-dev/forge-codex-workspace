@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.20
+
+- Set Anthropic Sans as the default interface and conversation font, loading the variable font from Anthropic's CDN with system-font fallbacks.
+
 ## 1.0.16
 
 - Bundled Chromium and Playwright browser tools for Codex, Claude, and external provider sessions. Agents can open local web apps, inspect pages, click, type, drag, take screenshots, and check console and network activity without installing a separate browser.

@@ -30,8 +30,8 @@
     graphite: { name: 'Graphite', colors: { ...baseColors, page: '#1a1c1f', sidebar: '#16181b', paper: '#23262b', field: '#1d2025', hover: '#2d3239', user: '#2b3037', code: '#191c21', ink: '#edf0f3', muted: '#a0a8b3', line: '#353b44', accent: '#d39b7e', onAccent: '#201813', brand: '#a5b1ed', success: '#8bbf9a', danger: '#eb9189', astra: '#bd9ce8', sol: '#e2b26b', luna: '#a2b7ee', provider: '#c09de5', nvidia: '#a5c775' } },
     midnight: { name: 'Midnight', colors: { ...baseColors, page: '#141b29', sidebar: '#101623', paper: '#1c2535', field: '#172031', hover: '#29354b', user: '#27344b', code: '#111a29', ink: '#e7edf9', muted: '#9eacc5', line: '#33425b', accent: '#9aaee8', onAccent: '#14213d', brand: '#9aaee8', success: '#8cc8b1', danger: '#ed9d9d', astra: '#c6abea', sol: '#e9bd77', luna: '#a4c5ff', provider: '#c6abea', nvidia: '#a8c786' } },
   };
-  const defaults = { version: 1, preset: 'linen', colors: { ...baseColors }, fonts: { ui: 'system', chat: 'system', code: 'Consolas' }, customFonts: { ui: '', chat: '', code: '' }, uiScale: 100, chatSize: 15, codeSize: 12, lineHeight: 1.7, pattern: 'none', composerShape: 'rounded', composerHeight: 0 };
-  const fontChoices = ['system', 'Segoe UI', 'Arial', 'Calibri', 'Verdana', 'Trebuchet MS', 'Georgia', 'Cambria', 'Times New Roman', 'Consolas', 'Cascadia Code', 'Courier New', 'custom', 'uploaded'];
+  const defaults = { version: 1, preset: 'linen', colors: { ...baseColors }, fonts: { ui: 'Anthropic Sans', chat: 'Anthropic Sans', code: 'Consolas' }, customFonts: { ui: '', chat: '', code: '' }, uiScale: 100, chatSize: 15, codeSize: 12, lineHeight: 1.7, pattern: 'none', composerShape: 'rounded', composerHeight: 0 };
+  const fontChoices = ['system', 'Anthropic Sans', 'Segoe UI', 'Arial', 'Calibri', 'Verdana', 'Trebuchet MS', 'Georgia', 'Cambria', 'Times New Roman', 'Consolas', 'Cascadia Code', 'Courier New', 'custom', 'uploaded'];
   const fontSlots = [['ui', 'Interface font'], ['chat', 'Conversation font'], ['code', 'Code & terminal font']];
   const uploadedFonts = new Map();
   let settings = normalize(readSaved());
@@ -57,8 +57,8 @@
   }
   function family(slot) {
     const selected = settings.fonts[slot];
-    const fallback = slot === 'code' ? 'ui-monospace, Consolas, monospace' : 'system-ui, -apple-system, "Segoe UI", sans-serif';
-    if (selected === 'system') return fallback;
+    const fallback = slot === 'code' ? 'ui-monospace, Consolas, monospace' : 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif';
+    if (selected === 'system') return slot === 'code' ? fallback : `"Anthropic Sans", ${fallback}`;
     if (selected === 'uploaded') return `${JSON.stringify(`ForgeUploaded${slot}`)}, ${fallback}`;
     const name = selected === 'custom' ? settings.customFonts[slot] : selected;
     return name ? `${JSON.stringify(name)}, ${fallback}` : fallback;
