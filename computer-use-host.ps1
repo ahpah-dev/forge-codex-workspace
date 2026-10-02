@@ -1,4 +1,6 @@
 $ErrorActionPreference = 'Stop'
+[Console]::InputEncoding = New-Object System.Text.UTF8Encoding($false)
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 
 $nativeInput = @'
 using System;
@@ -82,6 +84,57 @@ public static class ForgeDesktopInput
 
     [DllImport("user32.dll")]
     private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+
+    private delegate bool WindowCallback(IntPtr window, IntPtr parameter);
+    [DllImport("user32.dll")]
+    private static extern bool EnumWindows(WindowCallback callback, IntPtr parameter);
+    [DllImport("user32.dll")]
+    private static extern bool IsWindowVisible(IntPtr window);
+    [DllImport("user32.dll")]
+    private static extern bool IsIconic(IntPtr window);
+    [DllImport("user32.dll")]
+    private static extern bool ShowWindow(IntPtr window, int command);
+    [DllImport("user32.dll")]
+    private static extern bool SetForegroundWindow(IntPtr window);
+
+    public sealed class WindowInfo
+    {
+        public string handle;
+        public string title;
+        public int processId;
+        public bool minimized;
+    }
+
+    public static WindowInfo[] Windows()
+    {
+        var windows = new System.Collections.Generic.List<WindowInfo>();
+        EnumWindows(delegate(IntPtr window, IntPtr parameter) {
+            if (!IsWindowVisible(window)) return true;
+            var text = new StringBuilder(512);
+            GetWindowText(window, text, text.Capacity);
+            if (text.Length == 0) return true;
+            uint processId;
+            GetWindowThreadProcessId(window, out processId);
+            windows.Add(new WindowInfo { handle = window.ToInt64().ToString(), title = text.ToString(), processId = unchecked((int)processId), minimized = IsIconic(window) });
+            return true;
+        }, IntPtr.Zero);
+        return windows.ToArray();
+    }
+
+    public static string Focus(string target)
+    {
+        var windows = Windows();
+        var matches = Array.FindAll(windows, window => window.handle == target || String.Equals(window.title, target, StringComparison.OrdinalIgnoreCase));
+        if (matches.Length == 0) matches = Array.FindAll(windows, window => window.title.IndexOf(target, StringComparison.OrdinalIgnoreCase) >= 0);
+        if (matches.Length == 0) throw new InvalidOperationException("No open window matches. Inspect computer_use_state for current window handles.");
+        if (matches.Length > 1) throw new InvalidOperationException("Several windows match. Use an exact window handle from computer_use_state.");
+        var handle = new IntPtr(Int64.Parse(matches[0].handle));
+        if (IsIconic(handle)) ShowWindow(handle, 9);
+        SetForegroundWindow(handle);
+        Thread.Sleep(150);
+        if (GetForegroundWindow() != handle) throw new InvalidOperationException("Windows prevented focus switching. Use the desktop screenshot or Alt+Tab to select the intended app.");
+        return matches[0].title;
+    }
 
     private static void EnsureSent(Input[] inputs)
     {
@@ -218,8 +271,10 @@ while ($null -ne ($line = [Console]::In.ReadLine())) {
                     cursor = @{ x = [ForgeDesktopInput]::CursorX(); y = [ForgeDesktopInput]::CursorY() }
                     foregroundWindow = [ForgeDesktopInput]::ForegroundTitle()
                     processId = [ForgeDesktopInput]::ForegroundProcessId()
+                    windows = @([ForgeDesktopInput]::Windows())
                 }
             }
+            'focus' { @{ foregroundWindow = [ForgeDesktopInput]::Focus([string]$request.target) } }
             'move' { [ForgeDesktopInput]::Move([int]$request.x, [int]$request.y); @{ moved = $true } }
             'click' { [ForgeDesktopInput]::Click([int]$request.x, [int]$request.y, [string]$request.button, [int]$request.count); @{ clicked = $true } }
             'drag' { [ForgeDesktopInput]::Drag([int]$request.fromX, [int]$request.fromY, [int]$request.toX, [int]$request.toY, [string]$request.button); @{ dragged = $true } }

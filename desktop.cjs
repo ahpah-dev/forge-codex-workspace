@@ -10,9 +10,11 @@ if (process.env.FORGE_USER_DATA_DIR) app.setPath('userData', path.resolve(proces
 let serverProcess;
 let mainWindow;
 let browserView;
+let browserNeedsRecovery = false;
+const browserPopups = new Map();
+let activeBrowserPopup = null;
 let forgeResourceRoot;
 let computerHost;
-let computerHostBuffer = '';
 let computerHostRequestId = 0;
 const computerHostPending = new Map();
 const desktopScreenshotSizes = new Map();
@@ -124,6 +126,7 @@ async function startForge() {
       FORGE_DATA_DIR: dataRoot,
       FORGE_NO_BROWSER: '1',
       FORGE_IN_APP_BROWSER: '1',
+      FORGE_APP_VERSION: app.getVersion(),
       CODEX_CLI: codexExecutable,
       CLAUDE_CLI: claudeExecutable,
     },
@@ -210,11 +213,14 @@ function createMainWindow(url) {
     browserView = null;
     browserAttached = false;
     browserVisible = false;
+    for (const popup of browserPopups.values()) if (!popup.isDestroyed()) popup.destroy();
+    browserPopups.clear(); activeBrowserPopup = null;
     if (!stopping) stopForge();
   });
 }
 
 function createBrowserView() {
+  browserNeedsRecovery = false;
   browserView = new WebContentsView({
     webPreferences: {
       partition: 'persist:forge-in-app-browser',
@@ -229,10 +235,7 @@ function createBrowserView() {
   browserView.setVisible(false);
   browserView.setBackgroundColor('#fafaf8');
   browserView.setBorderRadius(7);
-  browserView.webContents.setWindowOpenHandler(({ url }) => {
-    void runBrowserCommand('navigate', { url }).catch(() => {});
-    return { action: 'deny' };
-  });
+  configureBrowserPopups(browserView.webContents);
   browserView.webContents.on('will-navigate', (event, url) => {
     if (!isBrowserUrl(url)) event.preventDefault();
   });
@@ -245,7 +248,42 @@ function createBrowserView() {
   browserView.webContents.on('did-fail-load', (_event, code, description, _url, isMainFrame) => {
     if (isMainFrame && code !== -3) update({ loading: false, error: description || 'The page could not be loaded.' });
   });
-  browserView.webContents.on('render-process-gone', () => update({ loading: false, error: 'This page stopped responding. Reload it to continue.' }));
+  browserView.webContents.on('render-process-gone', () => { browserNeedsRecovery = true; update({ loading: false, error: 'The browser page stopped. Open or reload it to recover.' }); });
+}
+
+function configureBrowserPopups(contents) {
+  contents.setWindowOpenHandler(({ url }) => {
+    if (url !== 'about:blank' && !isBrowserUrl(url)) return { action: 'deny' };
+    return { action: 'allow', overrideBrowserWindowOptions: {
+      width: 1000, height: 760, parent: mainWindow, autoHideMenuBar: true,
+      webPreferences: { partition: 'persist:forge-in-app-browser', contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true },
+    } };
+  });
+  contents.on('did-create-window', (popup) => {
+    const id = String(popup.webContents.id);
+    browserPopups.set(id, popup);
+    activeBrowserPopup = id;
+    configureBrowserPopups(popup.webContents);
+    popup.webContents.on('will-navigate', (event, url) => { if (!isBrowserUrl(url)) event.preventDefault(); });
+    popup.webContents.on('will-redirect', (event, url) => { if (!isBrowserUrl(url)) event.preventDefault(); });
+    popup.on('focus', () => { activeBrowserPopup = id; });
+    popup.on('closed', () => {
+      browserPopups.delete(id);
+      if (activeBrowserPopup === id) activeBrowserPopup = null;
+    });
+  });
+}
+
+function browserWebContents() {
+  const popup = browserPopups.get(activeBrowserPopup);
+  if (popup && !popup.isDestroyed() && !popup.webContents.isDestroyed()) return popup.webContents;
+  activeBrowserPopup = null;
+  return browserView.webContents;
+}
+
+function browserViewportBounds() {
+  const popup = browserPopups.get(activeBrowserPopup);
+  return popup && !popup.isDestroyed() ? popup.getContentBounds() : browserView.getBounds();
 }
 
 function isBrowserUrl(value) {
@@ -269,19 +307,19 @@ function normalizeBrowserUrl(value) {
 }
 
 function browserSnapshot() {
+  const contents = browserWebContents();
   return {
-    url: browserView.webContents.getURL(),
-    title: browserView.webContents.getTitle(),
-    loading: browserView.webContents.isLoading(),
-    canGoBack: browserView.webContents.navigationHistory.canGoBack(),
-    canGoForward: browserView.webContents.navigationHistory.canGoForward(),
-    error: browserState.error || '',
+    url: contents.getURL(), title: contents.getTitle(), loading: contents.isLoading(),
+    canGoBack: contents.navigationHistory.canGoBack(), canGoForward: contents.navigationHistory.canGoForward(),
+    pageId: String(contents.id), error: activeBrowserPopup ? '' : browserState.error || '',
   };
 }
 
 async function showBrowserPane() {
-  if (browserVisible) return;
   if (!mainWindow || mainWindow.isDestroyed()) throw new Error('Forge is closing. Reopen the in-app browser after it starts.');
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  if (!mainWindow.isVisible()) mainWindow.show();
+  if (browserVisible) return;
   const ready = new Promise((resolve, reject) => {
     const timeout = setTimeout(() => { browserLayoutWaiters.delete(onReady); reject(new Error('The in-app browser could not open.')); }, 6000);
     const onReady = () => { clearTimeout(timeout); resolve(); };
@@ -295,7 +333,7 @@ const browserPause = (milliseconds) => new Promise((resolve) => setTimeout(resol
 
 async function settleBrowserPage() {
   await browserPause(100);
-  const contents = browserView.webContents;
+  const contents = browserWebContents();
   if (contents.isLoading()) {
     let finish;
     let timeout;
@@ -310,9 +348,37 @@ async function settleBrowserPage() {
   await browserPause(60);
 }
 
+async function navigateBrowserPage(contents, url) {
+  let onReady, onFail, timeout;
+  const ready = new Promise((resolve, reject) => {
+    onReady = resolve;
+    onFail = (_event, code, description, _url, mainFrame) => {
+      if (mainFrame && code !== -3) reject(new Error(`Could not open ${url}: ${description}`));
+    };
+    contents.once('dom-ready', onReady);
+    contents.on('did-fail-load', onFail);
+    timeout = setTimeout(() => reject(new Error(`The browser did not reach a usable page at ${url} within 30 seconds. Check the connection or try another URL.`)), 30000);
+  });
+  try {
+    // DOM readiness keeps pages with long-lived requests usable without returning
+    // an empty previous document just because a timer expired.
+    await Promise.race([contents.loadURL(url), ready]);
+    await settleBrowserPage();
+    if (browserState.error && contents === browserView.webContents) throw new Error(browserState.error);
+    browserNeedsRecovery = false;
+  } catch (error) {
+    contents.stop();
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+    contents.removeListener('dom-ready', onReady);
+    contents.removeListener('did-fail-load', onFail);
+  }
+}
+
 async function markBrowserPointer(x, y, pressed = false) {
   browserPointer = { x, y };
-  await browserView.webContents.executeJavaScript(`(() => {
+  await browserWebContents().executeJavaScript(`(() => {
     let pointer = document.getElementById('__forge_agent_pointer');
     if (!pointer) {
       pointer = document.createElement('div'); pointer.id = '__forge_agent_pointer'; pointer.setAttribute('aria-hidden', 'true');
@@ -336,23 +402,27 @@ function startComputerHost() {
   if (computerHost && computerHost.exitCode === null) return computerHost;
   if (process.platform !== 'win32') throw new Error('Native desktop controls are currently available in the Windows Forge app.');
   const script = path.join(forgeResourceRoot || __dirname, 'computer-use-host.ps1');
-  const host = spawn(process.env.FORGE_POWERSHELL_EXE || 'powershell.exe', [
+  const windowsPowerShell = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0');
+  const host = spawn(process.env.FORGE_POWERSHELL_EXE || path.join(windowsPowerShell, 'powershell.exe'), [
     '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script,
-  ], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+  ], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env,
+    PSModulePath: [path.join(windowsPowerShell, 'Modules'), path.join(process.env.ProgramFiles || 'C:\\Program Files', 'WindowsPowerShell', 'Modules')].join(path.delimiter),
+  } });
   computerHost = host;
-  computerHostBuffer = '';
+  let hostBuffer = '';
   host.stdout.setEncoding('utf8');
   host.stdout.on('data', (chunk) => {
-    computerHostBuffer += chunk;
-    if (computerHostBuffer.length > 2 * 1024 * 1024) {
+    if (computerHost !== host) return;
+    hostBuffer += chunk;
+    if (hostBuffer.length > 2 * 1024 * 1024) {
       host.kill();
       rejectComputerHostRequests(new Error('The native desktop helper returned too much data.'));
       return;
     }
     let newline;
-    while ((newline = computerHostBuffer.indexOf('\n')) >= 0) {
-      const line = computerHostBuffer.slice(0, newline).trim();
-      computerHostBuffer = computerHostBuffer.slice(newline + 1);
+    while ((newline = hostBuffer.indexOf('\n')) >= 0) {
+      const line = hostBuffer.slice(0, newline).trim();
+      hostBuffer = hostBuffer.slice(newline + 1);
       if (!line) continue;
       let response;
       try { response = JSON.parse(line); } catch { continue; }
@@ -364,14 +434,23 @@ function startComputerHost() {
       else pending.resolve(response.result || {});
     }
   });
-  host.stderr.on('data', () => {});
+  let stderrTail = '';
+  host.stderr.on('data', (chunk) => { stderrTail = (stderrTail + chunk.toString()).slice(-1500); });
   host.on('error', (error) => {
-    if (computerHost === host) computerHost = null;
+    if (computerHost !== host) return;
+    computerHost = null;
     rejectComputerHostRequests(new Error(`Could not start the Windows desktop controller: ${error.message}`));
   });
   host.on('exit', (code) => {
-    if (computerHost === host) computerHost = null;
-    if (computerHostPending.size) rejectComputerHostRequests(new Error(`The Windows desktop controller stopped${code === null ? '' : ` (exit ${code})`}.`));
+    if (computerHost !== host) return;
+    computerHost = null;
+    if (computerHostPending.size) rejectComputerHostRequests(new Error(`The Windows desktop controller stopped${code === null ? '' : ` (exit ${code})`}.${stderrTail ? ` ${stderrTail.trim()}` : ''}`));
+  });
+  host.stdin.on('error', (error) => {
+    if (computerHost !== host) return;
+    computerHost = null;
+    rejectComputerHostRequests(new Error(`The Windows desktop controller disconnected: ${error.message}`));
+    host.kill();
   });
   return host;
 }
@@ -381,8 +460,9 @@ function sendComputerHost(action, params = {}) {
   const id = String(++computerHostRequestId);
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
-      computerHostPending.delete(id);
-      reject(new Error('The Windows desktop controller did not respond in time.'));
+      if (computerHost === host) computerHost = null;
+      rejectComputerHostRequests(new Error('The Windows desktop controller timed out and was reset. Inspect the desktop again before continuing; do not repeat input blindly.'));
+      host.kill();
     }, 20000);
     computerHostPending.set(id, { resolve, reject, timeout });
     try { host.stdin.write(`${JSON.stringify({ id, action, ...params })}\n`); }
@@ -435,11 +515,13 @@ async function desktopPoint(xValue, yValue, displayId) {
   if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0 || x >= size.width || y >= size.height) {
     throw new Error(`Use coordinates inside the latest computer screenshot (0–${size.width - 1}, 0–${size.height - 1}).`);
   }
-  const scale = Number(display.scaleFactor) || 1;
+  const nativePoint = screen.dipToScreenPoint({
+    x: Math.round(display.bounds.x + x * display.bounds.width / size.width),
+    y: Math.round(display.bounds.y + y * display.bounds.height / size.height),
+  });
   return {
     display,
-    x: Math.round((display.bounds.x + x * display.bounds.width / size.width) * scale),
-    y: Math.round((display.bounds.y + y * display.bounds.height / size.height) * scale),
+    x: nativePoint.x, y: nativePoint.y,
   };
 }
 
@@ -470,6 +552,22 @@ function parseDesktopKeyChord(value) {
 }
 
 async function executeDesktopComputerAction(action, params = {}) {
+  if (action === 'computer-open') {
+    const target = String(params.target || '').trim();
+    if (isBrowserUrl(target)) await shell.openExternal(target);
+    else {
+      if (!path.isAbsolute(target)) throw new Error('Use an absolute app/file/folder path, or an HTTP/HTTPS URL.');
+      const error = await shell.openPath(target);
+      if (error) throw new Error(`Windows could not open ${target}: ${error}`);
+    }
+    return { message: `Windows accepted the open request for ${target}. Inspect computer_use_state and a fresh screenshot to verify the window opened.` };
+  }
+  if (action === 'computer-focus') {
+    const target = String(params.target || '').trim();
+    if (!target || target.length > 512) throw new Error('Choose a window handle or title from computer_use_state.');
+    const result = await sendComputerHost('focus', { target });
+    return { ...result, message: `Focused ${result.foregroundWindow}. Take a fresh screenshot before interacting.` };
+  }
   if (action === 'computer-state') {
     const state = await sendComputerHost('state');
     const displays = screen.getAllDisplays().map((display, index) => ({
@@ -478,7 +576,7 @@ async function executeDesktopComputerAction(action, params = {}) {
       height: Math.round(display.bounds.height * (Number(display.scaleFactor) || 1)),
       scaleFactor: Number(display.scaleFactor) || 1,
     }));
-    return { ...state, displays, message: `Foreground window: ${state.foregroundWindow || '(untitled)'}. Cursor: ${state.cursor.x}, ${state.cursor.y}. Displays: ${displays.map((display) => `${display.displayId}${display.primary ? ' (primary)' : ''} ${display.width}×${display.height}`).join('; ')}.` };
+    return { ...state, displays, message: `Foreground window: ${state.foregroundWindow || '(untitled)'}. Cursor: ${state.cursor.x}, ${state.cursor.y}. Displays: ${displays.map((display) => `${display.displayId}${display.primary ? ' (primary)' : ''} ${display.width}×${display.height}`).join('; ')}.\nOpen windows:\n${(state.windows || []).map((window) => `${window.handle}: ${window.title}${window.minimized ? ' (minimized)' : ''}`).join('\n')}` };
   }
   if (action === 'computer-screenshot') {
     const capture = await captureDesktopDisplay(params.displayId);
@@ -550,17 +648,21 @@ function runComputerUseCommand(action, params = {}) {
 
 function runBrowserCommand(action, params = {}) {
   if (action === 'stop' && browserView) {
-    browserView.webContents.stop();
+    browserWebContents().stop();
     return Promise.resolve(browserSnapshot());
   }
   const next = browserCommandQueue.then(async () => {
-    const labels = { navigate: 'Opening website', snapshot: 'Reading page', screenshot: 'Capturing page', click: 'Clicking page element', type: 'Typing in page', 'press-key': 'Pressing a key', 'click-at': 'Clicking page', move: 'Moving pointer', drag: 'Dragging', scroll: 'Scrolling page', back: 'Going back', forward: 'Going forward', reload: 'Reloading page', stop: 'Stopping navigation' };
+    const labels = { open: 'Opening browser', tabs: 'Selecting browser page', navigate: 'Opening website', snapshot: 'Reading page', screenshot: 'Capturing page', click: 'Clicking page element', type: 'Typing in page', 'press-key': 'Pressing a key', 'click-at': 'Clicking page', move: 'Moving pointer', drag: 'Dragging', scroll: 'Scrolling page', back: 'Going back', forward: 'Going forward', reload: 'Reloading page', stop: 'Stopping navigation' };
     clearTimeout(browserActivityTimer);
     if (labels[action]) {
       browserState = { ...browserState, activity: labels[action], actionActive: true };
       mainWindow?.webContents.send('forge:browser-state', browserState);
     }
     try { return await executeBrowserCommand(action, params); }
+    catch (error) {
+      browserState = { ...browserState, error: error.message || 'The browser action failed.' };
+      throw error;
+    }
     finally {
       browserState = { ...browserState, actionActive: false };
       mainWindow?.webContents.send('forge:browser-state', browserState);
@@ -575,34 +677,79 @@ function runBrowserCommand(action, params = {}) {
 }
 
 async function executeBrowserCommand(action, params = {}) {
-  if (!browserView) createBrowserView();
-  const webContents = browserView.webContents;
+  if (!browserView || browserView.webContents.isDestroyed()) {
+    if (browserView && browserAttached) mainWindow?.contentView.removeChildView(browserView);
+    browserAttached = false; browserVisible = false;
+    createBrowserView();
+  }
+  if (action === 'tabs') {
+    const id = String(params.pageId || '');
+    if (params.operation === 'close') {
+      const popup = browserPopups.get(id);
+      if (!popup) throw new Error('Only popup pages can be closed. Use a popup pageId from browser_tabs.');
+      await new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => { popup.removeListener('closed', closed); reject(new Error('The popup did not close. Inspect it for an unsaved-changes prompt.')); }, 3000);
+        const closed = () => { clearTimeout(timeout); resolve(); };
+        popup.once('closed', closed);
+        popup.close();
+      });
+    } else if (params.operation === 'select') {
+      if (id === String(browserView.webContents.id)) { activeBrowserPopup = null; await showBrowserPane(); mainWindow.focus(); }
+      else {
+        const popup = browserPopups.get(id);
+        if (!popup || popup.isDestroyed()) throw new Error('That browser page is no longer open. List pages again.');
+        activeBrowserPopup = id;
+        if (popup.isMinimized()) popup.restore();
+        popup.show(); popup.focus();
+      }
+    } else if (params.operation && params.operation !== 'list') throw new Error('Choose list, select, or close.');
+    const pages = [browserView.webContents, ...[...browserPopups.values()].filter((popup) => !popup.isDestroyed()).map((popup) => popup.webContents)];
+    return { ...browserSnapshot(), message: pages.map((page) => `${page.id}${page === browserWebContents() ? ' (active)' : ''}: ${page.getTitle() || '(untitled)'} ${page.getURL() || 'about:blank'}`).join('\n') };
+  }
+  if (action === 'open') {
+    activeBrowserPopup = null;
+    await showBrowserPane();
+    if (params.url) return executeBrowserCommand('navigate', params);
+    if (!browserView.webContents.getURL()) throw new Error('Provide a URL or search phrase to open a browser page.');
+    if (browserNeedsRecovery) {
+      browserState.error = '';
+      await navigateBrowserPage(browserView.webContents, browserView.webContents.getURL());
+    }
+    return browserSnapshot();
+  }
+  const webContents = browserWebContents();
   // Reveal once; returning to chat does not get undone by every tool call.
   if (!browserAttached) await showBrowserPane();
   if (action === 'state') return browserSnapshot();
   if (action === 'navigate') {
     const url = normalizeBrowserUrl(params.url);
-    let timeout;
-    let onReady;
-    const domReady = new Promise((resolve) => {
-      onReady = resolve;
-      webContents.once('dom-ready', onReady);
-      timeout = setTimeout(resolve, 12000);
-    });
-    try { await Promise.race([webContents.loadURL(url), domReady]); }
-    catch (error) { if (error.errno !== -3 && error.code !== 'ERR_ABORTED') throw error; }
-    finally { clearTimeout(timeout); webContents.removeListener('dom-ready', onReady); }
-    await settleBrowserPage();
+    browserState.error = '';
+    await navigateBrowserPage(webContents, url);
     return browserSnapshot();
+  }
+  if (browserNeedsRecovery && !activeBrowserPopup) {
+    const url = webContents.getURL();
+    if (!isBrowserUrl(url)) throw new Error('The browser page stopped. Use browser_open with a URL to recover.');
+    browserState.error = '';
+    await navigateBrowserPage(webContents, url);
   }
   if (action === 'back' || action === 'forward') {
     const canNavigate = action === 'back' ? webContents.navigationHistory.canGoBack() : webContents.navigationHistory.canGoForward();
     if (!canNavigate) return browserSnapshot();
     await (action === 'back' ? webContents.navigationHistory.goBack() : webContents.navigationHistory.goForward());
+    await settleBrowserPage();
     return browserSnapshot();
   }
-  if (action === 'reload') { webContents.reload(); return browserSnapshot(); }
+  if (action === 'reload') {
+    const url = webContents.getURL();
+    if (!isBrowserUrl(url)) throw new Error('Open a URL before reloading the browser.');
+    browserState.error = '';
+    await navigateBrowserPage(webContents, url);
+    return browserSnapshot();
+  }
   if (action === 'stop') { webContents.stop(); return browserSnapshot(); }
+  await settleBrowserPage();
+  if (!webContents.getURL() || webContents.getURL() === 'about:blank') throw new Error('No browser page is open. Use browser_open or browser_navigate with a URL first.');
   if (action === 'snapshot') {
     const page = await webContents.executeJavaScript(`(() => {
       const visible = (element) => { const rect = element.getBoundingClientRect(); const style = getComputedStyle(element); return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none'; };
@@ -618,7 +765,7 @@ async function executeBrowserCommand(action, params = {}) {
   if (action === 'screenshot') {
     await webContents.executeJavaScript("document.getElementById('__forge_agent_pointer')?.remove()").catch(() => {});
     const image = await webContents.capturePage();
-    const { width, height } = browserView.getBounds();
+    const { width, height } = browserViewportBounds();
     const alignedImage = image.resize({ width: Math.max(1, width), height: Math.max(1, height) });
     return { ...browserSnapshot(), imageBase64: alignedImage.toPNG().toString('base64'), mimeType: 'image/png' };
   }
@@ -685,7 +832,7 @@ async function executeBrowserCommand(action, params = {}) {
   }
   if (action === 'click-at') {
     const x = Math.round(Number(params.x)); const y = Math.round(Number(params.y));
-    if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0 || x > browserView.getBounds().width || y > browserView.getBounds().height) throw new Error('Click coordinates must be inside the browser page.');
+    if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0 || x > browserViewportBounds().width || y > browserViewportBounds().height) throw new Error('Click coordinates must be inside the browser page.');
     await markBrowserPointer(x, y, true);
     webContents.sendInputEvent({ type: 'mouseMove', x, y });
     webContents.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: params.doubleClick ? 2 : 1 });
@@ -695,7 +842,7 @@ async function executeBrowserCommand(action, params = {}) {
   }
   if (action === 'move') {
     const x = Math.round(Number(params.x)); const y = Math.round(Number(params.y));
-    if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0 || x > browserView.getBounds().width || y > browserView.getBounds().height) throw new Error('Pointer coordinates must be inside the browser page.');
+    if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0 || x > browserViewportBounds().width || y > browserViewportBounds().height) throw new Error('Pointer coordinates must be inside the browser page.');
     const start = { ...browserPointer };
     await markBrowserPointer(x, y);
     for (let step = 1; step <= 8; step++) {
@@ -707,7 +854,7 @@ async function executeBrowserCommand(action, params = {}) {
   }
   if (action === 'drag') {
     const points = [params.fromX, params.fromY, params.toX, params.toY].map((value) => Math.round(Number(value)));
-    if (points.some((value) => !Number.isFinite(value) || value < 0) || points[0] > browserView.getBounds().width || points[2] > browserView.getBounds().width || points[1] > browserView.getBounds().height || points[3] > browserView.getBounds().height) throw new Error('Drag coordinates must stay inside the browser page.');
+    if (points.some((value) => !Number.isFinite(value) || value < 0) || points[0] > browserViewportBounds().width || points[2] > browserViewportBounds().width || points[1] > browserViewportBounds().height || points[3] > browserViewportBounds().height) throw new Error('Drag coordinates must stay inside the browser page.');
     const [fromX, fromY, toX, toY] = points;
     await markBrowserPointer(fromX, fromY, true);
     webContents.sendInputEvent({ type: 'mouseMove', x: fromX, y: fromY });
@@ -725,8 +872,8 @@ async function executeBrowserCommand(action, params = {}) {
   if (action === 'scroll') {
     const deltaY = Math.max(-3000, Math.min(3000, Math.round(Number(params.deltaY) || 0)));
     const deltaX = Math.max(-1500, Math.min(1500, Math.round(Number(params.deltaX) || 0)));
-    const x = Math.max(0, Math.min(browserView.getBounds().width - 1, Math.round(Number(params.x) || 20)));
-    const y = Math.max(0, Math.min(browserView.getBounds().height - 1, Math.round(Number(params.y) || 20)));
+    const x = Math.max(0, Math.min(browserViewportBounds().width - 1, Math.round(Number(params.x) || 20)));
+    const y = Math.max(0, Math.min(browserViewportBounds().height - 1, Math.round(Number(params.y) || 20)));
     let sentX = 0, sentY = 0;
     for (let step = 1; step <= 8; step++) {
       const nextX = Math.round(deltaX * step / 8), nextY = Math.round(deltaY * step / 8);

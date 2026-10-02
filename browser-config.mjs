@@ -10,6 +10,7 @@ export function browserMcpConfig(appRoot, dataRoot, cwd) {
         ELECTRON_RUN_AS_NODE: '1',
         FORGE_BROWSER_API_URL: process.env.FORGE_BROWSER_API_URL,
         FORGE_BROWSER_API_TOKEN: process.env.FORGE_BROWSER_API_TOKEN,
+        FORGE_APP_VERSION: process.env.FORGE_APP_VERSION || '1.0.33',
       },
     };
   }
@@ -25,7 +26,20 @@ export function browserCodexConfig(appRoot, dataRoot, cwd) {
   return { 'mcp_servers.forge_browser': {
     ...browserMcpConfig(appRoot, dataRoot, cwd),
     startup_timeout_sec: 30,
-    tool_timeout_sec: 90,
+    tool_timeout_sec: 120,
+    enabled: true,
     required: true,
   } };
+}
+
+// CLI -c values are TOML, not JSON objects. Use the same bridge at process
+// startup and on thread resume so tool discovery and old sessions agree.
+function tomlValue(value) {
+  if (Array.isArray(value)) return `[${value.map(tomlValue).join(', ')}]`;
+  if (value && typeof value === 'object') return `{ ${Object.entries(value).map(([key, item]) => `${JSON.stringify(key)} = ${tomlValue(item)}`).join(', ')} }`;
+  return JSON.stringify(value);
+}
+
+export function browserCodexArgs(appRoot, dataRoot, cwd) {
+  return Object.entries(browserCodexConfig(appRoot, dataRoot, cwd)).flatMap(([key, value]) => ['-c', `${key}=${tomlValue(value)}`]);
 }

@@ -24,7 +24,7 @@ File edits appear in expandable code cards with line numbers and additions/remov
 
 Download the latest Windows x64 installer from [GitHub Releases](https://github.com/davidegeric-cloud/forge-codex-workspace/releases/latest). Run the installer, then launch Forge from the Start menu or desktop shortcut. Sign in to Codex once in the Codex app or Codex CLI; Forge uses that saved local account automatically.
 
-To build the installer yourself, use Node.js 18 or newer on Windows x64, run `npm install`, then `npm run dist:win`. The installer is written to `release/Forge-Setup-1.0.32-x64.exe`. The desktop app bundles its Codex runtime and does not need a global Node.js install.
+To build the installer yourself, use Node.js 18 or newer on Windows x64, run `npm install`, then `npm run dist:win`. The installer is written to `release/Forge-Setup-1.0.33-x64.exe`. The desktop app bundles its Codex runtime and does not need a global Node.js install.
 
 ## Start from source
 
@@ -78,6 +78,8 @@ Assistant Markdown renders local workspace file links as compact clickable chips
 ## Browser verification
 
 The Windows desktop app provides host-level computer-use tools for Codex, Claude, and configured Codex-runtime models. They can inspect screenshots and use the real desktop pointer and keyboard in other Windows apps, with screenshot-based coordinates. Ask the model to inspect the screen before it acts. Browser-specific tasks can still use Forge's visible in-app browser, which has a persistent profile. The browser-based version uses its bundled isolated Chromium browser and does not control the Windows desktop.
+
+Desktop agents can list open window handles, restore/focus an app, and open absolute app/file/folder paths or URLs in your default browser. `browser_open` reveals the embedded browser; `browser_tabs` lists and selects real popup pages, including login windows. Codex receives these tools at runtime startup and thread resume. Browser navigation waits for a usable document and reports failures; crashed pages and timed-out desktop helpers can recover on the next request. Windows can still block input to elevated apps or secure desktop prompts, and some sites restrict embedded-browser sign-in.
 
 For source builds, run `npm run browser:install` to install the pinned browser runtime. Windows packaging runs this step automatically.
 

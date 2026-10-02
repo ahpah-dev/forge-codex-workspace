@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.33
+
+- Register Forge's computer/browser MCP tools at Codex runtime startup as well as thread start/resume; refresh resumed sessions after runtime or plugin reconnection.
+- Add desktop window discovery, restore/focus, and app/file/system-browser opening tools.
+- Correct native mouse coordinates on displays with different scaling; restart stalled desktop helpers and report their actual errors.
+- Add explicit embedded-browser reopening, renderer recovery, usable-document navigation waits, and clear load failures.
+- Preserve real browser login popups and their opener/session, with tools to list, select, and close pages.
+- Cancel queued computer-use actions when their tool request is abandoned, without automatically replaying input.
+
 ## 1.0.32
 
 - Fixed Windows file links beginning with `/C:/` so valid workspace files no longer resolve to a duplicated drive such as `C:\C:\`.
