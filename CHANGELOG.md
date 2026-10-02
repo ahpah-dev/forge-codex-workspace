@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.39
+
+- Fix Manage providers failing to open when Free Auto Route is enabled: derived routing entries have no API base URL.
+- Render Free Auto Route as a managed routing entry with a Configure button that opens its settings.
+- Keep Edit and Remove actions for saved API providers and guard missing endpoint/model metadata.
+- Extend the provider UI regression check with persisted Free Auto Route and NVIDIA configuration.
+
 ## 1.0.38
 
 - Keep the model menu and Manage providers button inside the window, including short windows, pill composers, and long catalogs.

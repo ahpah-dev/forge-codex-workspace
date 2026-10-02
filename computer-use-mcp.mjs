@@ -70,7 +70,7 @@ async function handle(message) {
   if (method === 'notifications/initialized') return;
   if (id === undefined) return;
   if (method === 'initialize') {
-    send({ jsonrpc: '2.0', id, result: { protocolVersion: params.protocolVersion || '2025-03-26', capabilities: { tools: { listChanged: false } }, serverInfo: { name: 'forge-computer-use', version: process.env.FORGE_APP_VERSION || '1.0.38' }, instructions: computerUseInstructions() } });
+    send({ jsonrpc: '2.0', id, result: { protocolVersion: params.protocolVersion || '2025-03-26', capabilities: { tools: { listChanged: false } }, serverInfo: { name: 'forge-computer-use', version: process.env.FORGE_APP_VERSION || '1.0.39' }, instructions: computerUseInstructions() } });
     return;
   }
   if (method === 'ping') { send({ jsonrpc: '2.0', id, result: {} }); return; }

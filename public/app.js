@@ -415,30 +415,39 @@ function renderProviderList() {
     return;
   }
   for (const provider of state.providers) {
+    const isFreeRoute = provider.id === 'forge-free';
+    const baseUrl = String(provider.baseUrl || '');
+    const modelCount = Array.isArray(provider.models) ? provider.models.length : 0;
     const row = document.createElement('div');
     row.className = 'provider-entry';
     const mark = document.createElement('span');
     mark.className = `provider-entry-mark ${provider.id.includes('nvidia') ? 'nvidia' : ''}`.trim();
     mark.setAttribute('aria-hidden', 'true');
-    mark.textContent = provider.nativePreset === 'kilo-free' ? 'K' : provider.id.includes('nvidia') ? 'N' : provider.id.includes('openrouter') ? '◈' : provider.baseUrl.includes('api.groq.com') ? 'G' : '◇';
+    mark.textContent = provider.nativePreset === 'kilo-free' ? 'K' : provider.id.includes('nvidia') ? 'N' : provider.id.includes('openrouter') ? '◈' : baseUrl.includes('api.groq.com') ? 'G' : '◇';
     const copy = document.createElement('span');
     copy.className = 'provider-entry-copy';
     const name = document.createElement('strong');
     name.textContent = provider.name;
     const endpoint = document.createElement('small');
-    endpoint.textContent = `${provider.baseUrl} · ${provider.models.length} model${provider.models.length === 1 ? '' : 's'}`;
+    endpoint.textContent = isFreeRoute ? 'OpenRouter → NVIDIA NIM · Managed in Settings' : `${baseUrl} · ${modelCount} model${modelCount === 1 ? '' : 's'}`;
     copy.append(name, endpoint);
     const status = document.createElement('span');
     status.className = 'provider-entry-state';
-    status.textContent = provider.authConfigured ? 'Key saved' : 'Add API key';
+    status.textContent = isFreeRoute ? (provider.authConfigured ? 'Keys saved' : 'Add routing keys') : provider.authConfigured ? 'Key saved' : 'Add API key';
     if (!provider.authConfigured) status.style.color = '#a15e49';
     const actions = document.createElement('span');
     actions.className = 'provider-entry-actions';
-    const edit = document.createElement('button');
-    edit.type = 'button'; edit.textContent = 'Edit'; edit.dataset.providerEdit = provider.id;
-    const remove = document.createElement('button');
-    remove.type = 'button'; remove.className = 'provider-remove'; remove.textContent = 'Remove'; remove.dataset.providerRemove = provider.id;
-    actions.append(edit, remove);
+    if (isFreeRoute) {
+      const configure = document.createElement('button');
+      configure.type = 'button'; configure.textContent = 'Configure'; configure.dataset.providerRouting = 'true';
+      actions.append(configure);
+    } else {
+      const edit = document.createElement('button');
+      edit.type = 'button'; edit.textContent = 'Edit'; edit.dataset.providerEdit = provider.id;
+      const remove = document.createElement('button');
+      remove.type = 'button'; remove.className = 'provider-remove'; remove.textContent = 'Remove'; remove.dataset.providerRemove = provider.id;
+      actions.append(edit, remove);
+    }
     row.append(mark, copy, status, actions);
     list.append(row);
   }
@@ -475,6 +484,12 @@ function openProvidersDialog() {
   renderAnthropicAccount();
   renderProviderList();
   setModal('providers-modal', true);
+}
+
+function openFreeRoutingSettings() {
+  setModal('providers-modal', false);
+  window.ForgeTheme.open();
+  $('#free-routing-enabled').focus();
 }
 
 async function connectAnthropic() {
@@ -548,6 +563,7 @@ function selectProviderPreset(preset) {
 }
 
 function editProvider(providerId) {
+  if (providerId === 'forge-free') { openFreeRoutingSettings(); return; }
   const provider = state.providers.find((item) => item.id === providerId);
   if (!provider) return;
   $('#provider-id').value = provider.id;
@@ -4522,6 +4538,7 @@ $('#provider-discover').addEventListener('click', discoverProviderModels);
 $('#provider-save').addEventListener('click', saveProvider);
 $('#provider-cancel-edit').addEventListener('click', resetProviderForm);
 $('#provider-list').addEventListener('click', (event) => {
+  if (event.target.closest('[data-provider-routing]')) { openFreeRoutingSettings(); return; }
   const edit = event.target.closest('[data-provider-edit]');
   const remove = event.target.closest('[data-provider-remove]');
   if (edit) editProvider(edit.dataset.providerEdit);

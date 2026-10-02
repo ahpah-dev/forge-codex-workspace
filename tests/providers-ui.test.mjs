@@ -8,8 +8,9 @@ import os from 'node:os';
 import {fileURLToPath} from 'node:url';
 const root=path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 
-test('provider setup stays clickable with long catalogs, small windows, pill composer and no models', {timeout:45000}, async()=>{
+test('provider setup opens with Free Auto Route enabled, long catalogs, small windows and no models', {timeout:45000}, async()=>{
   const profile=await fs.mkdtemp(path.join(os.tmpdir(),'forge-provider-ui-test-'));
+  await fs.writeFile(path.join(profile, 'settings.json'), JSON.stringify({freeRouting:{enabled:true},providers:[{id:'nvidia-nim',name:'NVIDIA NIM',baseUrl:'https://integrate.api.nvidia.com/v1',models:[{id:'openai/gpt-oss-20b'}]}]}));
   const child=spawn(process.execPath,['server.mjs'],{cwd:root,env:{...process.env,FORGE_PORT:'0',FORGE_DATA_DIR:profile,FORGE_NO_BROWSER:'1'},stdio:['ignore','pipe','ignore'],windowsHide:true});
   let browser;
   try {
@@ -24,11 +25,13 @@ test('provider setup stays clickable with long catalogs, small windows, pill com
     const page=await browser.newPage();
     const errors=[];page.on('pageerror',error=>errors.push(error.message));
     await page.goto(url);await page.waitForSelector('#prompt-input');
+    await page.waitForFunction(()=>state.providers.some(provider=>provider.id==='forge-free'));
     // Freeze model refreshes while exercising realistic catalog extremes.
     await page.evaluate(()=>{refreshState=async()=>{};});
     for (const scenario of [{width:1440,height:960,count:100,shape:'rounded'}, {width:900,height:640,count:100,shape:'pill'}, {width:900,height:640,count:0,shape:'rounded'}]) {
       await page.setViewportSize({width:scenario.width,height:scenario.height});
       await page.evaluate(({count,shape})=>{
+        state.providers=[{id:'nvidia-nim',name:'NVIDIA NIM',baseUrl:'https://integrate.api.nvidia.com/v1',authConfigured:true,models:[{id:'openai/gpt-oss-20b'}]}, {id:'forge-free',name:'Free Auto Route',authConfigured:true,models:[{id:'auto-free',name:'OpenRouter Free Auto Route'}]}];
         state.models=Array.from({length:count},(_,index)=>({id:'test-model-'+index,name:'Test model '+index}));
         document.documentElement.dataset.composerShape=shape;renderModelPicker();
       },scenario);
@@ -39,10 +42,16 @@ test('provider setup stays clickable with long catalogs, small windows, pill com
       await page.locator('#model-search').fill('test');
       await page.locator('#manage-providers').click();
       assert.equal(await page.locator('#providers-modal').isVisible(),true);
+      assert.equal(await page.locator('[data-provider-edit="forge-free"], [data-provider-remove="forge-free"]').count(),0);
+      assert.equal(await page.locator('[data-provider-edit="nvidia-nim"]').count(),1);
+      assert.equal(await page.locator('#provider-list').innerText().then(text=>text.includes('undefined')),false);
       await page.locator('[data-provider-preset="nvidia"]').click();
       assert.equal(await page.locator('#provider-base-url').inputValue(),'https://integrate.api.nvidia.com/v1');
-      await page.locator('#providers-modal .dialog-close').click();
+      await page.locator('[data-provider-routing]').click();
       assert.equal(await page.locator('#providers-modal').isVisible(),false);
+      assert.equal(await page.locator('#settings-modal').isVisible(),true);
+      assert.equal(await page.locator('#free-routing-enabled').evaluate(element=>element===document.activeElement),true);
+      await page.locator('#appearance-close').click();
     }
     assert.deepEqual(errors,[]);
   } finally {
