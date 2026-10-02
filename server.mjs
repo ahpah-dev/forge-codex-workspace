@@ -10,7 +10,7 @@ import { promisify } from 'node:util';
 import { decryptProviderKey, encryptProviderKey, readEncryptedProviderKeys, writeEncryptedProviderKeys } from './provider-secrets.mjs';
 import { createAnthropicProvider } from './anthropic-provider.mjs';
 import { createFreeRouter, FREE_PROVIDER_ID, FREE_KEY_IDS, isCodexLimitError, exhaustedCodexLimit } from './free-router.mjs';
-import { bridgeResponses, createChatProviderRouter, providerApiFormat } from './responses-bridge.mjs';
+import { bridgeResponses, createChatProviderRouter, providerApiFormat, GROQ_CODING_MODELS, isGroqProvider } from './responses-bridge.mjs';
 import { browserCodexConfig, browserCodexArgs, computerUseInstructions } from './browser-config.mjs';
 import './public/question-protocol.js';
 import './public/plugin-protocol.js';
@@ -593,7 +593,7 @@ class CodexAppServer {
       this.emit({ type: 'connection', connected: false, message: 'Codex connection closed.' });
     });
     await this.requestRaw('initialize', {
-      clientInfo: { name: 'forge_coding_workspace', title: 'Forge', version: process.env.FORGE_APP_VERSION || '1.0.35' },
+      clientInfo: { name: 'forge_coding_workspace', title: 'Forge', version: process.env.FORGE_APP_VERSION || '1.0.36' },
       capabilities: { experimentalApi: true },
     });
     this.notify('initialized', {});
@@ -1285,9 +1285,11 @@ async function handleApi(req, res, url) {
         if (!response.ok) throw new Error(`The provider model list returned HTTP ${response.status}. Check the endpoint and API key.`);
         const payload = await response.json();
         const rows = Array.isArray(payload?.data) ? payload.data : Array.isArray(payload?.models) ? payload.models : [];
-        const modelIds = [...new Set(rows.map((model) => String(model?.id || model?.name || '').trim()).filter((id) => /^[\w./:@+-]{1,180}$/.test(id)))].slice(0, 100);
+        const availableIds = [...new Set(rows.filter((model) => model?.active !== false).map((model) => String(model?.id || model?.name || '').trim()).filter((id) => /^[\w./:@+-]{1,180}$/.test(id)))].slice(0, 100);
+        const codingOnly = isGroqProvider({ baseUrl });
+        const modelIds = codingOnly ? GROQ_CODING_MODELS.filter((id) => availableIds.includes(id)) : availableIds;
         if (!modelIds.length) throw new Error('The provider returned no model IDs. Add model IDs manually.');
-        return json(res, 200, { modelIds });
+        return json(res, 200, { modelIds, codingOnly });
       }
       if (route === '/api/providers/save') {
         const name = String(input.name || '').trim().slice(0, 48);

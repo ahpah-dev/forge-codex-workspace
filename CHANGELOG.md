@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.36
+
+- Add a native Groq Free provider preset with key setup links, coding model defaults, and free-plan limits guidance.
+- Discover supported active coding models from the authenticated Groq catalog.
+- Add Groq Chat Completions compatibility, sequential GPT-OSS tools, bounded completion size, and useful quota errors.
+- Keep ChatGPT connected while Groq uses its own account and quota.
+
 ## 1.0.35
 
 - Added a native computer-use connection diagnostic with helper health, real window inventory, displays, embedded browser pages, and recovery guidance.

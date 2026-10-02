@@ -585,7 +585,9 @@ button { -webkit-tap-highlight-color: transparent; }
 .provider-entry-actions button:hover, .provider-cancel-edit:hover { background: var(--hover); }
 .provider-entry-actions .provider-remove { color: var(--danger); }
 .provider-form-heading { display: flex; align-items: center; justify-content: space-between; margin: 14px 0 8px; color: var(--ink); font-size: calc(12px * var(--ui-scale)); }
-.provider-presets { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.provider-presets { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.groq-mark { color: #c66642; background: color-mix(in srgb, #c66642 10%, var(--paper)); font-weight: 750; }
+@media (max-width: 520px) { .provider-presets { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .provider-preset { display: flex; align-items: center; justify-content: center; min-width: 0; min-height: 43px; padding: 6px 9px; gap: 8px; border: 1px solid var(--line); border-radius: 9px; color: var(--ink); background: var(--code-bg); font-size: calc(10px * var(--ui-scale)); font-weight: 570; cursor: pointer; transition: border-color .15s, background .15s, transform .15s; }
 .provider-preset:hover, .provider-preset.selected { border-color: var(--line); background: var(--code-bg); }
 .provider-preset:active { transform: translateY(1px); }

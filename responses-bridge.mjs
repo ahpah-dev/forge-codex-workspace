@@ -1,5 +1,13 @@
 import { randomUUID } from 'node:crypto';
 
+// Documented free-plan coding models; discovery intersects this list with the
+// authenticated catalog, which does not expose the account's billing plan.
+export const GROQ_CODING_MODELS = ['openai/gpt-oss-120b', 'qwen/qwen3.8-27b', 'openai/gpt-oss-20b'];
+export function isGroqProvider(provider) {
+  try { return new URL(provider.baseUrl).hostname.toLowerCase() === 'api.groq.com'; }
+  catch { return false; }
+}
+
 // Codex owns filesystem tools, sandboxing and approval prompts. This adapter only
 // translates inference between Responses and OpenAI-compatible Chat Completions.
 export function toChatRequest(input) {
@@ -135,7 +143,7 @@ export function providerApiFormat(provider) {
   if (provider.apiFormat === 'chat' || provider.apiFormat === 'responses') return provider.apiFormat;
   try {
     const hostname = new URL(provider.baseUrl).hostname.toLowerCase();
-    if (hostname === 'integrate.api.nvidia.com' || hostname === 'openrouter.ai') return 'chat';
+    if (hostname === 'integrate.api.nvidia.com' || hostname === 'openrouter.ai' || hostname === 'api.groq.com') return 'chat';
   } catch { /* Invalid saved endpoints are rejected before making a request. */ }
   return 'responses';
 }
@@ -145,6 +153,14 @@ export function createChatProviderRouter({ provider, model, key, fetchImpl = fet
   return {
     async openCompletion(request, signal, { maxTokens = 16384 } = {}) {
       const body = { ...request, model, stream: true, max_tokens: Math.min(maxTokens, tokenLimit) };
+      if (isGroqProvider(provider)) {
+        body.max_tokens = Math.min(body.max_tokens, 4096);
+        // GPT-OSS does not support parallel tool calls on Groq. Keep local file,
+        // shell, browser, and question tools on the existing Codex executor.
+        if (model.startsWith('openai/gpt-oss-')) body.parallel_tool_calls = false;
+        for (const field of ['logprobs', 'top_logprobs', 'logit_bias']) delete body[field];
+        body.messages = (body.messages || []).map(({ name, ...message }) => message);
+      }
       // NVIDIA NIM models may reject parallel_tool_calls; other OpenAI-compatible
       // providers receive the Codex setting unchanged.
       if (provider.id === 'nvidia' || new URL(provider.baseUrl).hostname.toLowerCase() === 'integrate.api.nvidia.com') delete body.parallel_tool_calls;
@@ -171,7 +187,7 @@ export function createChatProviderRouter({ provider, model, key, fetchImpl = fet
         const detail = rejectedDetail || await response.json().catch(() => ({}));
         const explanation = String(detail.error?.message || detail.message || (typeof detail.detail === 'string' ? detail.detail : '')).replaceAll(key, '[redacted]').slice(0, 500);
         const hint = [401, 403].includes(response.status) ? 'Check your API key and model access in Settings.'
-          : response.status === 429 ? 'The provider rate limit was reached. Wait before retrying.'
+          : response.status === 429 ? (isGroqProvider(provider) ? 'Groq’s request or token limit was reached. Try a shorter task or a new chat with less context, or wait for your quota to reset. Check your Groq account limits.' : 'The provider rate limit was reached. Wait before retrying.')
             : [400, 422].includes(response.status) ? 'Choose a model that supports tool calling and this message type.'
               : response.status === 202 ? 'The provider queued this request instead of returning a live stream. Retry with a streaming model.' : '';
         throw Object.assign(new Error(`${provider.name} returned HTTP ${response.status}. ${hint}${explanation ? ' ' + explanation : ''}`.trim()), { status: response.status });
