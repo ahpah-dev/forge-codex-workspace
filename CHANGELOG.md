@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.38
+
+- Keep the model menu and Manage providers button inside the window, including short windows, pill composers, and long catalogs.
+- Allow provider setup when no models are loaded and preserve search, keyboard navigation, and outside-click behavior.
+- Correct NVIDIA GPT-OSS function names that contain channel/JSON metadata while validating every call against advertised tools.
+- Normalize NVIDIA system instructions, respect GPT-OSS output limits, forward supported reasoning effort settings, and retry temporary HTTP server failures once before any output.
+- Preserve original file-helper calls in conversation history so models can track multi-step writes and edits.
+- Start the NVIDIA preset with GPT-OSS 20B; preserve the Codex executor for actual file writes and edits.
+- Add provider UI and NVIDIA request/tool translation regression checks.
+
 ## 1.0.37
 
 - Add native Kilo Gateway Auto Free routing with a single Kilo API key and guided setup.

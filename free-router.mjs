@@ -69,7 +69,7 @@ export function createFreeRouter({ getKey, fetchImpl = fetch, onRoute = () => {}
     cache.set(provider, { models, expires: Date.now() + 10 * 60 * 1000 });
     return models;
   }
-  async function openCompletion(request, signal, { maxTokens = 16384, route: previousRoute } = {}) {
+  async function openCompletion(request, signal, { maxTokens = 16384, route: previousRoute, reasoningEffort } = {}) {
     const failures = [];
     for (const provider of ['openrouter', 'nvidia']) {
       if (previousRoute && provider !== previousRoute.provider) continue;
@@ -96,7 +96,7 @@ export function createFreeRouter({ getKey, fetchImpl = fetch, onRoute = () => {}
         let response;
         try {
           response = provider === 'nvidia'
-            ? (await createChatProviderRouter({ provider: { id: 'nvidia', name: 'NVIDIA NIM', baseUrl: base }, model: model.id, key, fetchImpl }).openCompletion(request, signal, { maxTokens })).response
+            ? (await createChatProviderRouter({ provider: { id: 'nvidia', name: 'NVIDIA NIM', baseUrl: base }, model: model.id, key, fetchImpl }).openCompletion(request, signal, { maxTokens, reasoningEffort })).response
             : await fetchImpl(`${base}/chat/completions`, {
             method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', ...(provider === 'openrouter' ? { 'X-OpenRouter-Title': 'Forge' } : {}) },
             body: JSON.stringify(body), signal,

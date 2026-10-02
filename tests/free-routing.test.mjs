@@ -234,3 +234,80 @@ test('partial stream failures never retry tools or report false completion', asy
   assert.equal(attempts, 1);
   assert.equal(events(res).at(-1).type, 'response.failed');
 });
+
+test('NVIDIA keeps structured tools, merges leading instructions and bounds GPT-OSS output', async () => {
+  let body;
+  const router=createChatProviderRouter({provider:{id:'nvidia-nim',name:'NVIDIA NIM',baseUrl:'https://integrate.api.nvidia.com/v1'},model:'openai/gpt-oss-20b',key:'fixture-key',fetchImpl:async(_url,options)=>{body=JSON.parse(options.body);return successful();}});
+  await router.openCompletion({messages:[{role:'system',content:'Instructions'},{role:'system',content:'Use tools'},{role:'user',content:'Save a file'}],tools:[{type:'function',function:{name:'write_file',parameters:{type:'object'}}}],parallel_tool_calls:true});
+  assert.equal(body.max_tokens,4096);
+  assert.equal(body.parallel_tool_calls,undefined);
+  assert.equal(body.tool_choice,'auto');
+  assert.deepEqual(body.messages,[{role:'system',content:'Instructions\n\nUse tools'},{role:'user',content:'Save a file'}]);
+  assert.equal(body.tools[0].function.name,'write_file');
+});
+
+test('NVIDIA output-limit validation retries once and preserves named tool calls', async () => {
+  const bodies=[];
+  const tool_choice={type:'function',function:{name:'write_file'}};
+  const router=createChatProviderRouter({provider:{id:'nvidia-nim',name:'NVIDIA NIM',baseUrl:'https://integrate.api.nvidia.com/v1'},model:'nvidia/nemotron-3-super-120b-a12b',key:'fixture-key',fetchImpl:async(_url,options)=>{
+    bodies.push(JSON.parse(options.body));
+    return bodies.length===1?json({detail:[{loc:['body','max_tokens'],msg:'Input should be less than or equal to 8192',ctx:{le:8192}}]},422):successful();
+  }});
+  await router.openCompletion({...request,tools:[{type:'function',function:{name:'write_file'}}],tool_choice});
+  assert.deepEqual(bodies.map(body=>body.max_tokens),[16384,8192]);
+  assert.deepEqual(bodies[1].tool_choice,tool_choice);
+  await router.openCompletion(request,undefined,{maxTokens:32768});
+  assert.equal(bodies.at(-1).max_tokens,8192);
+});
+
+test('NVIDIA GPT-OSS channel and JSON suffixes resolve only advertised tool names', async () => {
+  for (const suffix of ['analysisjson','commentaryjson','json','analysis<|constrain|>json']) {
+    const res=sink();
+    await bridgeResponses({input:{input:'Inspect',tools:[{type:'function',name:'exec_command'}]},res,router:{openCompletion:async()=>({route:{name:'NVIDIA GPT-OSS'},response:stream([{choices:[{delta:{tool_calls:[{index:0,id:'call_nim',function:{name:'exec_command<|channel|>'+suffix,arguments:'{"cmd":"pwd"}'}}]},finish_reason:'tool_calls'}]}])})}});
+    assert.equal(events(res).at(-1).type,'response.completed');
+    assert.equal(events(res).at(-1).response.output[0].name,'exec_command');
+  }
+  const res=sink();
+  await bridgeResponses({input:{input:'Inspect',tools:[{type:'function',name:'exec_command'}]},res,router:{openCompletion:async()=>({route:{name:'NVIDIA GPT-OSS'},response:stream([{choices:[{delta:{tool_calls:[{index:0,id:'call_bad',function:{name:'unadvertised<|channel|>analysisjson',arguments:'{}'}}]},finish_reason:'tool_calls'}]}])})}});
+  assert.equal(events(res).at(-1).type,'response.failed');
+  assert.equal(events(res).filter(event=>event.type==='response.output_item.done').length,0);
+});
+
+
+test('NVIDIA applies model-specific reasoning choices while other providers remain unchanged', async () => {
+  for (const [baseUrl,model,effort,expected] of [
+    ['https://integrate.api.nvidia.com/v1','openai/gpt-oss-20b','medium','medium'],
+    ['https://integrate.api.nvidia.com/v1','nvidia/nemotron-3-super-120b-a12b','medium','low'],
+    ['https://integrate.api.nvidia.com/v1','nvidia/nemotron-3-super-120b-a12b','high','high'],
+    ['https://example.test/v1','openai/gpt-oss-20b','medium',undefined],
+  ]) {
+    let body;
+    const router=createChatProviderRouter({provider:{id:'provider',name:'Provider',baseUrl},model,key:'fixture-key',fetchImpl:async(_url,options)=>{body=JSON.parse(options.body);return successful();}});
+    await router.openCompletion(request,undefined,{reasoningEffort:effort});
+    assert.equal(body.reasoning_effort,expected);
+  }
+});
+
+test('NVIDIA retries a transient HTTP failure before output but never auth or quota failures', async () => {
+  let calls=0;
+  const router=createChatProviderRouter({provider:{id:'nvidia-nim',name:'NVIDIA NIM',baseUrl:'https://integrate.api.nvidia.com/v1'},model:'openai/gpt-oss-20b',key:'fixture-key',fetchImpl:async()=>++calls===1?json({error:{message:'High demand'}},503):successful()});
+  await router.openCompletion(request);
+  assert.equal(calls,2);
+  for (const status of [401,429]) {
+    let rejected=0;
+    const blocked=createChatProviderRouter({provider:{id:'nvidia-nim',name:'NVIDIA NIM',baseUrl:'https://integrate.api.nvidia.com/v1'},model:'openai/gpt-oss-20b',key:'fixture-key',fetchImpl:async()=>{rejected++;return json({},status);}});
+    await assert.rejects(blocked.openCompletion(request));assert.equal(rejected,1);
+  }
+});
+
+test('file helper history round-trips the original function instead of an encoded shell command', async () => {
+  const input={input:'Save a file',tools:[{type:'function',name:'exec_command',parameters:{type:'object'}}]};
+  const res=sink();
+  await bridgeResponses({input,res,router:{openCompletion:async()=>({route:{name:'NVIDIA'},response:stream([{choices:[{delta:{tool_calls:[{index:0,id:'file_write',function:{name:'forge_write_file',arguments:JSON.stringify({path:'created.txt',content:'saved\n'})}}]},finish_reason:'tool_calls'}]}])})}});
+  const item=events(res).at(-1).response.output[0];
+  assert.equal(item.name,'exec_command');
+  const {request}=toChatRequest({...input,input:[{role:'user',content:'Save a file'},item,{type:'function_call_output',call_id:item.call_id,output:'Saved: created.txt'}]});
+  assert.equal(request.messages.find(message=>message.tool_calls)?.tool_calls[0].function.name,'forge_write_file');
+  assert.deepEqual(JSON.parse(request.messages.find(message=>message.tool_calls)?.tool_calls[0].function.arguments),{path:'created.txt',content:'saved\n'});
+  assert.equal(request.messages.at(-1).tool_call_id,'file_write');
+});

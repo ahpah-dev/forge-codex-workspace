@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
 
 // Documented free-plan coding models; discovery intersects this list with the
 // authenticated catalog, which does not expose the account's billing plan.
@@ -7,6 +8,10 @@ export const KILO_FREE_BASE_URL = 'https://api.kilo.ai/api/gateway';
 export const KILO_FREE_MODEL = 'kilo-auto/free';
 export function isGroqProvider(provider) {
   try { return new URL(provider.baseUrl).hostname.toLowerCase() === 'api.groq.com'; }
+  catch { return false; }
+}
+export function isNvidiaProvider(provider) {
+  try { return new URL(provider.baseUrl).hostname.toLowerCase() === 'integrate.api.nvidia.com'; }
   catch { return false; }
 }
 
@@ -61,7 +66,8 @@ export function toChatRequest(input) {
       const entry = [...toolMap.entries()].find(([, value]) => value.name === item.name && value.namespace === namespace)
         || [...toolMap.entries()].find(([, value]) => value.name === item.name);
       if (!entry) throw new Error(`The previous ${item.name} tool is unavailable in this request.`);
-      const call = { id: item.call_id, type: 'function', function: { name: entry[0], arguments: item.type === 'custom_tool_call' ? JSON.stringify({ input: item.input || '' }) : item.arguments || '{}' } };
+      const recovered = item.type === 'function_call' ? recoverFileOperationCall(item, toolMap) : null;
+      const call = { id: item.call_id, type: 'function', function: recovered || { name: entry[0], arguments: item.type === 'custom_tool_call' ? JSON.stringify({ input: item.input || '' }) : item.arguments || '{}' } };
       const previous = messages.at(-1);
       if (previous?.role === 'assistant' && previous.tool_calls) previous.tool_calls.push(call);
       else messages.push({ role: 'assistant', content: null, tool_calls: [call] });
@@ -91,6 +97,30 @@ export function toChatRequest(input) {
     ...(toolChoice ? { tool_choice: toolChoice } : {}),
     ...(typeof input.parallel_tool_calls === 'boolean' ? { parallel_tool_calls: input.parallel_tool_calls } : {}),
   } : {}) }, toolMap, allowedToolNames: allowedNames };
+}
+
+function recoverFileOperationCall(item, toolMap) {
+  if (item.name !== 'exec_command') return null;
+  try {
+    const shellArgs = JSON.parse(item.arguments || '{}');
+    const encoded = shellArgs.cmd?.match(/^powershell\.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand ([A-Za-z0-9+/=]+)$/)?.[1];
+    if (!encoded) return null;
+    const script = Buffer.from(encoded, 'base64').toString('utf16le');
+    const payload = script.match(/\$a=\[Text\.Encoding\]::UTF8\.GetString\(\[Convert\]::FromBase64String\('([A-Za-z0-9+/=]+)'\)\)/)?.[1];
+    if (!payload) return null;
+    const args = JSON.parse(Buffer.from(payload, 'base64').toString('utf8'));
+    for (const operation of ['write', 'edit']) {
+      const name = `forge_${operation}_file`;
+      const tool = toolMap.get(name);
+      if (!tool || tool.namespace !== (item.namespace || '')) continue;
+      // Only reverse our exact generated command. Ordinary shell history stays
+      // untouched. The model sees the same file function and JSON it called.
+      try {
+        if (fileOperationArguments(operation, args).cmd === shellArgs.cmd) return { name, arguments: JSON.stringify(args) };
+      } catch { /* This payload belongs to a different operation. */ }
+    }
+  } catch { /* Keep unrecognized shell calls in their original form. */ }
+  return null;
 }
 
 function translateToolChoice(choice, toolMap, hasTools) {
@@ -153,7 +183,7 @@ export function providerApiFormat(provider) {
 export function createChatProviderRouter({ provider, model, key, fetchImpl = fetch }) {
   let tokenLimit = 32768;
   return {
-    async openCompletion(request, signal, { maxTokens = 16384 } = {}) {
+    async openCompletion(request, signal, { maxTokens = 16384, reasoningEffort } = {}) {
       if (provider.nativePreset === 'kilo-free' && (provider.baseUrl !== KILO_FREE_BASE_URL || model !== KILO_FREE_MODEL)) throw new Error('Kilo Free Router can only use the official gateway and kilo-auto/free. Reconfigure the provider in Settings.');
       const body = { ...request, model, stream: true, max_tokens: Math.min(maxTokens, tokenLimit) };
       if (provider.nativePreset === 'kilo-free') {
@@ -171,11 +201,35 @@ export function createChatProviderRouter({ provider, model, key, fetchImpl = fet
       }
       // NVIDIA NIM models may reject parallel_tool_calls; other OpenAI-compatible
       // providers receive the Codex setting unchanged.
-      if (provider.id === 'nvidia' || new URL(provider.baseUrl).hostname.toLowerCase() === 'integrate.api.nvidia.com') delete body.parallel_tool_calls;
-      const invoke = () => fetchImpl(`${provider.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
+      if (isNvidiaProvider(provider)) {
+        delete body.parallel_tool_calls;
+        // GPT-OSS's documented hosted NIM limit is 4096. Other NIMs retain
+        // their larger budgets and the bounded validation-error retry below.
+        if (/^openai\/gpt-oss-(?:20|120)b$/.test(model)) body.max_tokens = Math.min(body.max_tokens, 4096);
+        if (/^openai\/gpt-oss-(?:20|120)b$/.test(model) && reasoningEffort) body.reasoning_effort = ['low', 'medium'].includes(reasoningEffort) ? reasoningEffort : 'high';
+        if (model === 'nvidia/nemotron-3-super-120b-a12b' && reasoningEffort) body.reasoning_effort = ['none', 'minimal'].includes(reasoningEffort) ? 'none' : ['low', 'medium'].includes(reasoningEffort) ? 'low' : 'high';
+        // NIM endpoints expect one leading system message. Keep all instructions
+        // intact, including Codex's tool guidance, without consecutive roles.
+        const leading = (body.messages || []).findIndex((message) => message.role !== 'system');
+        const count = leading < 0 ? (body.messages || []).length : leading;
+        if (count > 1) body.messages = [{ role: 'system', content: body.messages.slice(0, count).map((message) => message.content).join('\n\n') }, ...body.messages.slice(count)];
+        if (body.tools?.length && !body.tool_choice) body.tool_choice = 'auto';
+      }
+      const sendRequest = () => fetchImpl(`${provider.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
         method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json', Accept: 'text/event-stream' },
         body: JSON.stringify(body), signal,
       });
+      const invoke = async () => {
+        let result = await sendRequest();
+        if (isNvidiaProvider(provider) && [500, 502, 503, 504].includes(result.status)) {
+          // Retry only an HTTP rejection before any stream/tool has been
+          // exposed. Quota/auth failures and partial streams are not replayed.
+          await result.body?.cancel();
+          await delay(400, undefined, { signal });
+          result = await sendRequest();
+        }
+        return result;
+      };
       let response = await invoke();
       let rejectedDetail;
       if ([400, 422].includes(response.status)) {
@@ -260,7 +314,7 @@ export async function bridgeResponses({ input, res, router, signal }) {
   const { request, toolMap, allowedToolNames } = toChatRequest(input);
   let route, chunks, firstChunk;
   for (let attempt = 0; attempt < 3; attempt++) {
-    const opened = await router.openCompletion(request, signal, { maxTokens: 16384 });
+    const opened = await router.openCompletion(request, signal, { maxTokens: 16384, reasoningEffort: input.reasoning?.effort });
     route = opened.route;
     if (!opened.response.body) throw new Error('The routed provider did not return a response stream.');
     chunks = chatChunks(opened.response);
@@ -366,7 +420,7 @@ export async function bridgeResponses({ input, res, router, signal }) {
         ...(segmentText ? [{ role: 'assistant', content: segmentText }] : []),
         { role: 'user', content: continuation },
       ] };
-      const opened = await router.openCompletion(currentRequest, signal, { maxTokens: 32768, route });
+      const opened = await router.openCompletion(currentRequest, signal, { maxTokens: 32768, route, reasoningEffort: input.reasoning?.effort });
       route = opened.route;
       if (!opened.response.body) throw new Error('The provider did not return a recovery stream.');
       currentChunks = chatChunks(opened.response);
@@ -382,9 +436,10 @@ export async function bridgeResponses({ input, res, router, signal }) {
     if (!['stop', 'tool_calls', 'function_call'].includes(finishReason)) throw new Error(`${route.name} stopped with ${finishReason}. Partial output was retained; incomplete tool calls were not executed.`);
     // Validate the whole batch before exposing any executable tool calls.
     const completedCalls = [...calls.values()].map((call) => {
-      // Some NIM GPT-OSS streams leak a Harmony channel suffix into the
-      // function name. Accept only that known suffix, never an arbitrary tool.
-      const name = call.name.replace(/<\|channel\|>(?:analysis|commentary|final)$/, '');
+      // Some NIM GPT-OSS streams leak channel and JSON-format metadata into
+      // the function name. Strip only known terminal metadata; the remaining
+      // name must still exactly match an advertised tool below.
+      const name = call.name.replace(/<\|channel\|>(?:analysis|commentary|final|json)(?:json|<\|constrain\|>json)?$/, '');
       const tool = toolMap.get(name);
       if (!tool || !call.id) throw new Error(`The model returned an unknown or incomplete tool call (${String(call.name).slice(0, 64)}).`);
       if (allowedToolNames && !allowedToolNames.has(name)) throw new Error(`The model called ${name}, which this request did not allow.`);

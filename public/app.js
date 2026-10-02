@@ -524,7 +524,7 @@ function selectProviderPreset(preset) {
   $$('.provider-preset').forEach((button) => button.classList.toggle('selected', button.dataset.providerPreset === preset));
   const presets = {
     openrouter: { name: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1', placeholder: 'sk-or-…' },
-    nvidia: { name: 'NVIDIA NIM', baseUrl: 'https://integrate.api.nvidia.com/v1', placeholder: 'nvapi-…' },
+    nvidia: { name: 'NVIDIA NIM', baseUrl: 'https://integrate.api.nvidia.com/v1', placeholder: 'nvapi-…', models: ['openai/gpt-oss-20b'] },
     groq: { name: 'Groq Free', baseUrl: 'https://api.groq.com/openai/v1', placeholder: 'gsk_…', models: ['openai/gpt-oss-120b', 'qwen/qwen3.8-27b', 'openai/gpt-oss-20b'] },
     'kilo-free': { name: 'Kilo Free Router', baseUrl: 'https://api.kilo.ai/api/gateway', placeholder: 'Paste your Kilo profile API key', models: ['kilo-auto/free'] },
     custom: { name: '', baseUrl: '', placeholder: 'Paste provider API key' },
@@ -1037,7 +1037,8 @@ function renderModelPicker(orderedModels = state.models) {
   const triggerMark = $('#model-picker-mark');
   const models = orderedModels || [];
   const current = models.find((model) => model.id === state.modelId);
-  trigger.disabled = !models.length;
+  // Provider setup must remain available before any account has loaded models.
+  trigger.disabled = false;
   $('#model-picker-label').textContent = current?.name || (state.autoModelRouting ? 'GPT-6 unavailable' : state.account?.connected ? 'Models unavailable' : 'Connect Codex');
   trigger.title = current ? (current.id === current.name ? current.name : `${current.name} · ${current.id}`) : state.autoModelRouting ? 'No GPT-6 model is available in this Codex account' : 'Choose a model';
   triggerMark.className = `model-picker-mark tier-${getModelTier(current?.id, current?.providerId)}`;
@@ -1045,7 +1046,10 @@ function renderModelPicker(orderedModels = state.models) {
   $('#model-picker-count').textContent = models.length ? models.length + ' models' : '';
   optionsHost.replaceChildren();
   if (!models.length) {
-    setModelPickerOpen(false);
+    const empty = document.createElement('div');
+    empty.className = 'model-search-empty';
+    empty.textContent = 'Connect an account or add a provider to choose a model.';
+    optionsHost.append(empty);
     return;
   }
   for (const model of models) {
@@ -1082,6 +1086,11 @@ function renderModelPicker(orderedModels = state.models) {
 function filterModelOptions() {
   const query = $('#model-search').value.trim().toLocaleLowerCase();
   const options = [...$('#model-options').querySelectorAll('[role="option"]')];
+  if (!options.length) {
+    $('#model-picker-count').textContent = '0 models';
+    positionModelPickerMenu();
+    return;
+  }
   let visible = 0;
   for (const option of options) {
     const matches = !query || option.dataset.searchText.includes(query);
@@ -1099,6 +1108,20 @@ function filterModelOptions() {
     }
   } else empty?.remove();
   $('#model-picker-count').textContent = query ? `${visible} of ${options.length}` : `${options.length} models`;
+  positionModelPickerMenu();
+}
+
+function positionModelPickerMenu() {
+  const menu = $('#model-picker-menu');
+  if (menu.hidden) return;
+  const anchor = $('#model-picker-trigger').getBoundingClientRect();
+  const margin = 12, gap = 9;
+  const above = anchor.top - margin - gap;
+  const below = window.innerHeight - anchor.bottom - margin - gap;
+  const useAbove = above >= below;
+  menu.style.maxHeight = `${Math.max(0, useAbove ? above : below)}px`;
+  menu.style.left = `${Math.max(margin, Math.min(anchor.left, window.innerWidth - menu.offsetWidth - margin))}px`;
+  menu.style.top = `${useAbove ? Math.max(margin, anchor.top - gap - menu.offsetHeight) : anchor.bottom + gap}px`;
 }
 
 function setModelPickerOpen(open, restoreFocus = false) {
@@ -1108,8 +1131,11 @@ function setModelPickerOpen(open, restoreFocus = false) {
   menu.hidden = !shouldOpen;
   trigger.setAttribute('aria-expanded', String(shouldOpen));
   if (shouldOpen) {
+    // Escape the composer's transformed and clipped ancestors.
+    if (menu.parentElement !== document.body) document.body.append(menu);
     $('#model-search').value = '';
     filterModelOptions();
+    positionModelPickerMenu();
     $('#model-search').focus({ preventScroll: true });
   } else if (restoreFocus) trigger.focus({ preventScroll: true });
 }
@@ -4535,7 +4561,7 @@ $('#model-options').addEventListener('keydown', (event) => {
   else if (next) { event.preventDefault(); next.focus(); }
 });
 document.addEventListener('pointerdown', (event) => {
-  if (!event.target.closest('#model-picker')) setModelPickerOpen(false);
+  if (!event.target.closest('#model-picker, #model-picker-menu')) setModelPickerOpen(false);
   if (!event.target.closest('#effort-control')) setEffortPopoverOpen(false);
 });
 $('#effort-popover').addEventListener('keydown', (event) => {
@@ -4849,7 +4875,8 @@ sidebarHandle.addEventListener('keydown', (event) => {
 });
 refreshSidebarSizing();
 setSidebarHidden(localStorage.getItem('forge.sidebarHidden') === 'true');
-window.addEventListener('resize', () => { refreshSidebarSizing(); renderContext(); });
+window.addEventListener('resize', () => { refreshSidebarSizing(); renderContext(); positionModelPickerMenu(); });
+new ResizeObserver(positionModelPickerMenu).observe($('#model-picker-trigger'));
 window.addEventListener('keydown', (event) => {
   const modifier = event.ctrlKey || event.metaKey;
   if (modifier && event.key.toLowerCase() === 'o') { event.preventDefault(); openWorkspaceDialog(); }
