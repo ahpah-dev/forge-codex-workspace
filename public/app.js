@@ -1542,11 +1542,33 @@ function appendTree(parent, directory, depth, filter) {
   }
 }
 
+async function openLinkedFile(filePath) {
+  try {
+    if (!state.workspace?.path) throw new Error('Open a workspace folder to access this file.');
+    const relativePath = ForgeFilePaths.relativeToWorkspace(state.workspace.path, filePath);
+    if (!ForgeFilePaths.opensNatively(relativePath)) return openFile(relativePath);
+    const result = await api('/api/file/open', { method: 'POST', body: { path: relativePath } });
+    if (result.download) {
+      const response = await fetch(`/api/file/download?path=${encodeURIComponent(relativePath)}`, { headers: { 'X-Forge-Session': token } });
+      if (!response.ok) { const error = await response.json(); throw new Error(error.error || 'Could not download this file.'); }
+      const blobUrl = URL.createObjectURL(await response.blob());
+      const link = document.createElement('a');
+      link.href = blobUrl;
+      link.download = result.filename;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+    }
+  } catch (error) { showToast(error.message, 'error'); }
+}
+
 async function openFile(relativePath) {
   try {
     const result = await api(`/api/file?path=${encodeURIComponent(relativePath)}`);
     state.selectedFile = relativePath;
     state.activeContextTab = 'preview';
+    $('.app-shell').classList.remove('context-hidden');
     const preview = $('#file-preview');
     preview.replaceChildren();
     const toolbar = document.createElement('div');
@@ -1759,11 +1781,12 @@ function markdownInline(text) {
   let source = String(text || '');
   source = source.replace(/`([^`]+)`/g, (_, code) => stash(`<code>${escapeHTML(code)}</code>`));
   source = source.replace(/\[([^\]\n]+)\]\s*\\?\(\s*(?:\\?<([^>\n]+)>\\?|([^\s)]+))\s*\\?\)/g, (whole, label, angleTarget, plainTarget) => {
-    const target = String(angleTarget || plainTarget || '').trim().replace(/\\([()<>])/g, '$1');
+    let target = String(angleTarget || plainTarget || '').trim().replace(/\\([()<>])/g, '$1');
     const escapedLabel = escapeHTML(label.trim());
     if (/^https?:\/\//i.test(target)) return stash(`<a href="${escapeHTML(target)}" target="_blank" rel="noopener noreferrer">${escapedLabel}</a>`);
-    const isLocalPath = /^[a-z]:[\\/]/i.test(target) || /^(?:\\\\|\/|\.\.?[\\/])/.test(target) || !/^[a-z][a-z\d+.-]*:/i.test(target);
+    const isLocalPath = /^file:/i.test(target) || /^[a-z]:[\\/]/i.test(target) || /^(?:\\\\|\/|\.\.?[\\/])/.test(target) || !/^[a-z][a-z\d+.-]*:/i.test(target);
     if (isLocalPath && target && target.length <= 2048 && !/[<>\u0000-\u001f]/.test(target)) {
+      try { target = ForgeFilePaths.normalize(target); } catch { return whole; }
       const icon = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 1.75h5l3 3v9.5H4zM9 1.9v3h3M6 8h4M6 10.5h4"/></svg>';
       return stash(`<a class="file-link-chip" href="#" data-file-path="${escapeHTML(target)}" title="${escapeHTML(target)}"><span class="file-link-icon">${icon}</span><span>${escapedLabel}</span></a>`);
     }
@@ -4522,24 +4545,7 @@ $('#conversation-scroll').addEventListener('click', (event) => {
   const link = event.target.closest('a.file-link-chip');
   if (!link) return;
   event.preventDefault();
-  if (!state.workspace?.path) { showToast('Open a workspace folder to preview this file.'); return; }
-  const normalize = (value) => String(value || '').replace(/[\\/]+/g, '/').replace(/\/$/, '');
-  const root = normalize(state.workspace.path);
-  const target = normalize(link.dataset.filePath);
-  const isAbsolute = /^[a-z]:\//i.test(target) || target.startsWith('//');
-  let relativePath = target.replace(/^\.\//, '');
-  if (isAbsolute) {
-    if (!target.toLocaleLowerCase().startsWith(root.toLocaleLowerCase() + '/')) {
-      showToast('This file is outside the open workspace.');
-      return;
-    }
-    relativePath = target.slice(root.length + 1);
-  }
-  if (!relativePath || relativePath === '..' || relativePath.startsWith('../')) {
-    showToast('This link does not point to a file in the open workspace.');
-    return;
-  }
-  void openFile(relativePath);
+  void openLinkedFile(link.dataset.filePath);
 });
 $('#file-tree').addEventListener('click', async (event) => {
   const row = event.target.closest('[data-path]');
@@ -4552,7 +4558,7 @@ $('#file-tree').addEventListener('click', async (event) => {
       if (!state.treeCache.has(relativePath)) await loadTree(relativePath);
     }
     renderContext();
-  } else openFile(relativePath);
+  } else void openLinkedFile(relativePath);
 });
 $('#files-toggle').addEventListener('click', () => setContextTab('files', { toggle: true }));
 $('#changes-toggle').addEventListener('click', () => setContextTab('changes', { toggle: true }));

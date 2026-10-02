@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.32
+
+- Fixed Windows file links beginning with `/C:/` so valid workspace files no longer resolve to a duplicated drive such as `C:\C:\`.
+- Added file URI, encoded-space, UNC, and source-line handling shared by chat links and the workspace API.
+- Archive, document, and media links open with their Windows application in the desktop app, with an authenticated download fallback in the browser.
+- Source links now reveal the code preview panel when clicked.
+
 ## 1.0.31
 
 - Fixed cached chat switching to resynchronize the server’s active workspace before file actions run, preventing valid project files from being rejected against a different chat’s folder.

@@ -536,6 +536,12 @@ async function executeDesktopComputerAction(action, params = {}) {
 }
 
 function runComputerUseCommand(action, params = {}) {
+  if (action === 'open-file') {
+    return shell.openPath(String(params.path || '')).then((error) => {
+      if (error) throw new Error(`Windows could not open this file: ${error}`);
+      return { opened: true };
+    });
+  }
   if (!action.startsWith('computer-')) return runBrowserCommand(action, params);
   const next = desktopCommandQueue.then(() => executeDesktopComputerAction(action, params));
   desktopCommandQueue = next.catch(() => {});

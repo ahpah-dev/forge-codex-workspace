@@ -1,5 +1,5 @@
 import { spawn, execFile } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, createReadStream } from 'node:fs';
 import { createServer } from 'node:http';
 import { randomBytes } from 'node:crypto';
 import { readFile, writeFile, mkdir, readdir, realpath, stat, rename, unlink } from 'node:fs/promises';
@@ -14,6 +14,7 @@ import { bridgeResponses, createChatProviderRouter, providerApiFormat } from './
 import { browserCodexConfig } from './browser-config.mjs';
 import './public/question-protocol.js';
 import './public/plugin-protocol.js';
+import './public/file-paths.js';
 
 const execFileAsync = promisify(execFile);
 const appRoot = path.dirname(fileURLToPath(import.meta.url));
@@ -401,7 +402,8 @@ async function setWorkspace(candidate) {
 
 async function resolveWorkspacePath(relativePath = '') {
   if (!activeWorkspace) throw new Error('Open a workspace folder first.');
-  const absolute = path.resolve(activeWorkspace, String(relativePath || ''));
+  const input = relativePath ? ForgeFilePaths.normalize(relativePath) : '';
+  const absolute = path.resolve(activeWorkspace, input);
   if (!pathIsInside(activeWorkspace, absolute)) {
     const requestedPath = absolute.replace(/[\u0000-\u001f\u007f]/g, '�');
     throw new Error(`Path “${requestedPath}” is outside open workspace “${activeWorkspace}”. Open the folder containing that path and try again.`);
@@ -1132,6 +1134,20 @@ async function handleApi(req, res, url) {
     try { return json(res, 200, await readWorkspaceFile(url.searchParams.get('path') || '')); }
     catch (error) { return json(res, 400, { error: error.message }); }
   }
+  if (req.method === 'GET' && route === '/api/file/download') {
+    try {
+      const filePath = await resolveWorkspacePath(url.searchParams.get('path') || '');
+      const info = await stat(filePath);
+      if (!info.isFile()) throw new Error('Choose a file to download.');
+      const filename = encodeURIComponent(path.basename(filePath)).replace(/['()]/g, (char) => '%' + char.charCodeAt(0).toString(16));
+      res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': info.size, 'Content-Disposition': `attachment; filename*=UTF-8''${filename}`, 'Cache-Control': 'no-store' });
+      const stream = createReadStream(filePath);
+      stream.on('error', () => res.destroy());
+      res.on('close', () => stream.destroy());
+      stream.pipe(res);
+      return;
+    } catch (error) { return json(res, 400, { error: error.message }); }
+  }
   if (req.method === 'GET' && route === '/api/changes/file') {
     try { return json(res, 200, await readWorkspaceChange(url.searchParams.get('path') || '')); }
     catch (error) { return json(res, 400, { error: error.message }); }
@@ -1140,6 +1156,14 @@ async function handleApi(req, res, url) {
     let input;
     try { input = await bodyJson(req); } catch (error) { return json(res, 400, { error: error.message }); }
     try {
+      if (route === '/api/file/open') {
+        const filePath = await resolveWorkspacePath(input.path);
+        if (!(await stat(filePath)).isFile()) throw new Error('Choose a file to open.');
+        if (!ForgeFilePaths.opensNatively(filePath)) throw new Error('Open this file in the Forge preview.');
+        if (typeof process.send !== 'function' || !process.connected) return json(res, 200, { download: true, filename: path.basename(filePath) });
+        const result = await requestDesktopComputerUse('open-file', { path: filePath });
+        return json(res, 200, result);
+      }
       if (route === '/api/plugins/connect') {
         const setup = await getPluginSetup(validatePluginSelector(input.pluginId));
         const server = setup.servers.find((entry) => entry.name === input.serverName);
