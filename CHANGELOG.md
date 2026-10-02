@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.0.41
+
+- Add native local OmniRoute setup with an in-app installer, startup/status feedback, dashboard access, optional gateway key, and persisted provider configuration.
+- Install the pinned gateway into Forge's data folder using a bundled npm runtime; no global Node or npm installation is required in the desktop app.
+- Default to auto/coding:free and auto/fast:free, bind the managed gateway to localhost, and disable empty-free-pool fallback to paid models.
+- Automatically start an installed local gateway for inference and shut down Forge-owned processes on desktop exit; preserve separately running gateways.
+- Give Groq concise base instructions while preserving project rules, user input, developer messages, permissions, and tool history.
+- Normalize GPT-OSS tool names with local validation and retry one provider-rejected malformed inference before any output or tool execution.
+- Cover local gateway ownership/authentication, provider setup, tool repair, and real Groq file operations with regression checks.
+
+
 ## 1.0.40
 
 - Prevent Groq, Kilo, and other Chat Completions providers from receiving more than 128 tool definitions.

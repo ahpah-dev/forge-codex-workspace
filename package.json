@@ -1,6 +1,6 @@
 {
   "name": "forge-codex-workspace",
-  "version": "1.0.40",
+  "version": "1.0.41",
   "license": "MIT",
   "description": "Forge desktop AI workspace for Codex, Claude Code, and external APIs",
   "author": "Forge",
@@ -17,7 +17,8 @@
   "devDependencies": {
     "@openai/codex": "^0.159.0",
     "electron": "^44.5.1",
-    "electron-builder": "^26.15.3"
+    "electron-builder": "^26.15.3",
+    "npm": "12.2.0"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.285",
@@ -33,6 +34,20 @@
       "package.json"
     ],
     "extraResources": [
+      {
+        "from": "omniroute-manager.mjs",
+        "to": "forge/omniroute-manager.mjs"
+      },
+      {
+        "from": "node_modules/npm",
+        "to": "forge/node_modules/npm",
+        "filter": ["**/*"]
+      },
+      {
+        "from": "node_modules/npm/node_modules",
+        "to": "forge/node_modules/npm/node_modules",
+        "filter": ["**/*"]
+      },
       {
         "from": "server.mjs",
         "to": "forge/server.mjs"

@@ -5,10 +5,10 @@ import { createServer } from 'node:http';
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { bridgeResponses, createChatProviderRouter } from '../responses-bridge.mjs';
+import { bridgeResponses, createChatProviderRouter, providerBaseInstructions } from '../responses-bridge.mjs';
 import { decryptProviderKey, readEncryptedProviderKeys } from '../provider-secrets.mjs';
 
-for (const providerId of ['groq-free', 'kilo-free-router']) test(`${providerId} creates and edits real files with over 250 available tools`, { skip: process.env.FORGE_TOOL_LIVE !== '1', timeout: 360000 }, async () => {
+for (const {providerId,task} of [{providerId:'groq-free',task:'files'},{providerId:'groq-free',task:'chat'},{providerId:'kilo-free-router',task:'files'}]) test(task==='chat' ? `${providerId} GPT-OSS 20B answers a normal native Codex request` : `${providerId} creates and edits real files with over 250 available tools`, { skip: process.env.FORGE_TOOL_LIVE !== '1', timeout: 360000 }, async () => {
   const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
   const data = process.env.FORGE_TOOL_DATA || path.join(process.env.APPDATA, 'forge-codex-workspace', 'data');
   const settings = JSON.parse(await readFile(path.join(data, 'settings.json'), 'utf8'));
@@ -16,10 +16,11 @@ for (const providerId of ['groq-free', 'kilo-free-router']) test(`${providerId} 
   assert.ok(provider, 'Configure this provider in Forge first');
   const keys = await readEncryptedProviderKeys(path.join(data, 'provider-secrets.json'));
   const key = await decryptProviderKey(keys[provider.id]);
-  const model = providerId === 'groq-free' ? 'openai/gpt-oss-20b' : 'kilo-auto/free';
+  const model = providerId === 'groq-free' ? task==='chat' ? 'openai/gpt-oss-20b' : process.env.FORGE_GROQ_CHECK_MODEL || 'openai/gpt-oss-120b' : 'kilo-auto/free';
   let inferenceRequests=0;const toolCounts=[];
-  const router = createChatProviderRouter({ provider, model, key, fetchImpl: async (url, options) => {
+  const makeRouter = () => createChatProviderRouter({ provider, model, key, fetchImpl: async (url, options) => {
     const body=JSON.parse(options.body);inferenceRequests++;toolCounts.push(body.tools?.length || 0);
+    if(inferenceRequests===1) {assert.ok(JSON.stringify(body.messages).includes('FORGE_PROJECT_RULE_PROBE'));assert.ok(JSON.stringify(body.messages).includes(task==='chat'?'FORGE_CHAT_PROBE':'Actually save both files'));}
     if(inferenceRequests===1) console.log(JSON.stringify({provider:providerId,outputBudget:body.max_tokens,messageChars:JSON.stringify(body.messages).length,toolChars:JSON.stringify(body.tools).length}));
     assert.ok((body.tools?.length || 0)<=128);
     const response = await fetch(url,options);
@@ -35,6 +36,7 @@ for (const providerId of ['groq-free', 'kilo-free-router']) test(`${providerId} 
   const profile = path.join(workspace, 'profile');
   await mkdir(profile);
   await writeFile(path.join(workspace, 'existing.txt'), 'before\n');
+  await writeFile(path.join(workspace, 'AGENTS.md'), 'FORGE_PROJECT_RULE_PROBE: Read existing files before changing them.\n');
   let requests = 0;
   const server = createServer(async (req, res) => {
     try {
@@ -42,7 +44,7 @@ for (const providerId of ['groq-free', 'kilo-free-router']) test(`${providerId} 
       requests++;
       const input=JSON.parse(body);
       input.tools=[...Array.from({length:260},(_,index)=>({type:'function',name:'fixture_status_'+index,description:'An unrelated status lookup.',parameters:{type:'object',properties:{}}})),...(input.tools || [])];
-      await bridgeResponses({ input, res, router, signal: AbortSignal.timeout(180000) });
+      await bridgeResponses({ input, res, router: makeRouter(), signal: AbortSignal.timeout(180000) });
     } catch (error) {
       console.log(JSON.stringify({ provider: providerId, bridgeError: String(error.message).split(key).join('[redacted]') }));
       if (!res.headersSent) res.writeHead(500);
@@ -76,18 +78,25 @@ for (const providerId of ['groq-free', 'kilo-free-router']) test(`${providerId} 
     return new Promise((resolve, reject) => { const id = nextId++; pending.set(id, { resolve, reject }); child.stdin.write(JSON.stringify({ id, method, params }) + '\n'); });
   }
   try {
-    await rpc('initialize', { clientInfo: { name: 'forge_provider_tool_check', version: '1.0.40' }, capabilities: { experimentalApi: true } });
+    await rpc('initialize', { clientInfo: { name: 'forge_provider_tool_check', version: '1.0.41' }, capabilities: { experimentalApi: true } });
     child.stdin.write('{"method":"initialized","params":{}}\n');
     const config = { web_search: 'disabled', model_providers: { provider_check: { name: 'Provider check', base_url: `http://127.0.0.1:${server.address().port}`, wire_api: 'responses', requires_openai_auth: false, supports_websockets: false, request_max_retries: 0, stream_max_retries: 0 } } };
-    const started = await rpc('thread/start', { cwd: workspace, model, modelProvider: 'provider_check', sandbox: 'workspace-write', approvalPolicy: 'on-request', config });
+    const started = await rpc('thread/start', { cwd: workspace, model, modelProvider: 'provider_check', sandbox: 'workspace-write', approvalPolicy: 'on-request', config, ...(providerBaseInstructions(provider) ? {baseInstructions:providerBaseInstructions(provider)} : {}) });
     const completed = new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error('Provider edit check timed out')), 330000);
       listeners.add((event) => { if (event.method === 'turn/completed' && event.params.threadId === started.thread.id) { clearTimeout(timer); resolve(event.params.turn); } });
     });
     const batching = providerId === 'groq-free' ? 'For this check perform both file changes and their byte verification in one exec_command shell call to minimize API requests. ' : '';
-    await rpc('turn/start', { threadId: started.thread.id, effort: providerId === 'groq-free' ? 'low' : 'medium', input: [{ type: 'text', text: batching + 'Use your file tools to edit existing.txt: replace the exact JSON string "before\\n" with "after\\n". Create created.txt containing the exact JSON string "Provider saved this\\n". Here \\n means a real trailing LF byte, not the two characters backslash and n. Actually save both files on disk. Verify their bytes, including the final byte 10, and correct any missing trailing newline before completing. Only work in this current directory. Keep the final answer short.' }], sandboxPolicy: { type: 'workspaceWrite', writableRoots: [workspace], networkAccess: false } });
+    await rpc('turn/start', { threadId: started.thread.id, effort: 'medium', input: [{ type: 'text', text: task==='chat' ? 'FORGE_CHAT_PROBE: Reply exactly "Forge is ready." Do not call any tools or modify files.' : batching + 'Use your file tools to edit existing.txt: replace the exact JSON string "before\\n" with "after\\n". Create created.txt containing the exact JSON string "Provider saved this\\n". Here \\n means a real trailing LF byte, not the two characters backslash and n. Actually save both files on disk. Verify their bytes, including the final byte 10, and correct any missing trailing newline before completing. Only work in this current directory. Keep the final answer short.' }], sandboxPolicy: { type: 'workspaceWrite', writableRoots: [workspace], networkAccess: false } });
     const result = await completed;
     assert.equal(result.status, 'completed', String(result.error?.message || '').split(key).join('[redacted]'));
+    if(task==='chat') {
+      assert.ok(events.some(event=>event.method==='item/completed' && event.params.item?.type==='agentMessage' && event.params.item.text?.trim()==='Forge is ready.'));
+      assert.equal(await readFile(path.join(workspace,'existing.txt'),'utf8'),'before\n');
+      await assert.rejects(readFile(path.join(workspace,'created.txt')),error=>error.code==='ENOENT');
+      console.log(JSON.stringify({provider:providerId,model,requests,inferenceRequests,toolCounts,verified:['normal native request answered','project rules retained','no files changed']}));
+      return;
+    }
     assert.equal(await readFile(path.join(workspace, 'existing.txt'), 'utf8'), 'after\n');
     assert.equal(await readFile(path.join(workspace, 'created.txt'), 'utf8'), 'Provider saved this\n');
     assert.ok(events.some((event) => event.method === 'item/completed' && ['fileChange', 'commandExecution'].includes(event.params.item?.type)));

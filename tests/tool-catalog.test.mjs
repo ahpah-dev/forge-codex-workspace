@@ -1,12 +1,50 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { bridgeResponses, createChatProviderRouter, createToolCatalog, toChatRequest } from '../responses-bridge.mjs';
+import { bridgeResponses, createChatProviderRouter, createToolCatalog, toChatRequest, providerBaseInstructions } from '../responses-bridge.mjs';
 
 const dummyTools = () => Array.from({ length: 250 }, (_, index) => ({ type: 'function', name: `plugin_${index}`, description: 'An unrelated plugin action.', parameters: { type: 'object', properties: {} } }));
 const input = () => ({ input: 'Complete the requested action.', tools: [...dummyTools(), { type: 'namespace', name: 'functions', tools: [{ type: 'function', name: 'exec_command' }, { type: 'custom', name: 'apply_patch' }] }, { type: 'namespace', name: 'calendar', tools: [{ type: 'function', name: 'create_event', description: 'Create a calendar event.', parameters: { type: 'object', properties: { title: { type: 'string' } }, required: ['title'] } }] }] });
 const sink = () => ({ output: '', destroyed: false, writeHead() {}, write(chunk) { this.output += chunk; }, end() {} });
 const events = (res) => res.output.split('\n').filter((line) => line.startsWith('data:')).map((line) => JSON.parse(line.slice(5)));
 const response = (calls, reason = 'tool_calls') => new Response(JSON.stringify({ choices: [{ message: { content: null, tool_calls: calls.map(([name, args], index) => ({ id: `call_${index}`, type: 'function', function: { name, arguments: JSON.stringify(args) } })) }, finish_reason: reason }] }), { headers: { 'Content-Type': 'application/json' } });
+
+test('Groq compact base instructions are provider specific and leave project/developer messages intact',()=>{
+  const groq={baseUrl:'https://api.groq.com/openai/v1'};
+  assert.ok(providerBaseInstructions(groq).length<2500);
+  assert.match(providerBaseInstructions(groq),/AGENTS.md/);
+  assert.equal(providerBaseInstructions({baseUrl:'https://example.com/v1'}),undefined);
+  const translated=toChatRequest({instructions:providerBaseInstructions(groq),input:[{role:'developer',content:'Project rule: never delete files'},{role:'user',content:'Save my exact text'}]});
+  assert.ok(translated.request.messages.some(message=>message.content==='Project rule: never delete files'));
+  assert.ok(translated.request.messages.some(message=>message.content==='Save my exact text'));
+});
+
+test('Groq permits Harmony name normalization while retaining local validation and named choices',async()=>{
+  const bodies=[];const groq={id:'groq',name:'Groq',baseUrl:'https://api.groq.com/openai/v1'};
+  const router=createChatProviderRouter({provider:groq,model:'openai/gpt-oss-120b',key:'fixture',fetchImpl:async(_url,options)=>{bodies.push(JSON.parse(options.body));return response([['functions__exec_command<|channel|>commentary',{cmd:'echo ok'}]]);}});
+  const res=sink();await bridgeResponses({input:input(),res,router});
+  assert.equal(bodies[0].disable_tool_validation,true);assert.equal(bodies[0].parallel_tool_calls,false);
+  assert.equal(events(res).at(-1).type,'response.completed');assert.equal(events(res).at(-1).response.output[0].name,'exec_command');
+  const named=toChatRequest({...input(),tool_choice:{type:'function',name:'exec_command',namespace:'functions'}}).request;
+  await router.openCompletion(named);assert.equal(bodies[1].disable_tool_validation,undefined);
+});
+
+test('Groq repairs one rejected inference before output, without executing invalid calls',async()=>{
+  for (const streamed of [false,true]) {
+    let calls=0;const bodies=[];
+    const router=createChatProviderRouter({provider:{name:'Groq',baseUrl:'https://api.groq.com/openai/v1'},model:'openai/gpt-oss-120b',key:'fixture',fetchImpl:async(_url,options)=>{
+      calls++;bodies.push(JSON.parse(options.body));
+      if(calls===1){const error={code:'tool_use_failed',message:'Failed to parse tool call arguments as JSON'};return streamed?new Response(`data: ${JSON.stringify({error})}\n\ndata: [DONE]\n\n`,{headers:{'Content-Type':'text/event-stream'}}):new Response(JSON.stringify({error}),{status:400});}
+      return response([['functions__exec_command',{cmd:'echo repaired'}]]);
+    }});
+    const res=sink();await bridgeResponses({input:input(),res,router});
+    assert.equal(calls,2);assert.match(bodies[1].messages.at(-1).content,/No failed call was executed/);
+    assert.equal(events(res).at(-1).type,'response.completed');
+    assert.equal(events(res).filter(event=>event.type==='response.output_item.done').length,1);
+  }
+  let calls=0;
+  const router=createChatProviderRouter({provider:{name:'Groq',baseUrl:'https://api.groq.com/openai/v1'},model:'openai/gpt-oss-120b',key:'fixture',fetchImpl:async()=>{calls++;return new Response(JSON.stringify({error:{code:'tool_use_failed',message:'Invalid arguments'}}),{status:400});}});
+  await assert.rejects(router.openCompletion({messages:[]}),/HTTP 400/);assert.equal(calls,2);
+});
 
 test('large catalogs stay within 128 and retain core, custom, relevant and recent tools', () => {
   const source = input();

@@ -591,6 +591,16 @@ button { -webkit-tap-highlight-color: transparent; }
 .provider-presets { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .kilo-mark { color: var(--ink); background: color-mix(in srgb, #e6c44a 20%, var(--paper)); font-weight: 750; }
 .groq-mark { color: #c66642; background: color-mix(in srgb, #c66642 10%, var(--paper)); font-weight: 750; }
+.omni-mark { color: var(--provider); background: color-mix(in srgb, var(--provider) 12%, var(--paper)); font-weight: 750; }
+.omniroute-setup { margin: 12px 0; padding: 15px; border: 1px solid var(--line); border-radius: 12px; background: var(--code-bg); }
+.omniroute-setup[hidden] { display: none; }
+.omniroute-heading { display: flex; align-items: center; gap: 10px; }
+.omniroute-heading strong { display: block; font-size: calc(12px * var(--ui-scale)); font-weight: 620; }
+.omniroute-heading small { display: block; margin-top: 4px; color: var(--muted); font-size: calc(10px * var(--ui-scale)); }
+.omniroute-setup p { margin: 10px 0; color: var(--muted); font-size: calc(10px * var(--ui-scale)); line-height: 1.6; }
+.omniroute-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.omniroute-actions .quiet-button { min-height: 32px; font-size: calc(10px * var(--ui-scale)); }
+.omniroute-setup[data-busy="true"] .omni-mark { animation: gpt-mark-spin 1.7s linear infinite; }
 @media (max-width: 520px) { .provider-presets { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .provider-preset { display: flex; align-items: center; justify-content: center; min-width: 0; min-height: 43px; padding: 6px 9px; gap: 8px; border: 1px solid var(--line); border-radius: 9px; color: var(--ink); background: var(--code-bg); font-size: calc(10px * var(--ui-scale)); font-weight: 570; cursor: pointer; transition: border-color .15s, background .15s, transform .15s; }
 .provider-preset:hover, .provider-preset.selected { border-color: var(--line); background: var(--code-bg); }

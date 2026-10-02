@@ -936,13 +936,14 @@ function stopForge() {
   stopping = true;
   clearTimeout(readyTimer);
   if (!serverProcess || serverProcess.exitCode !== null) return app.quit();
-  serverProcess.kill('SIGTERM');
+  if (serverProcess.connected) serverProcess.send({ type: 'forge:shutdown' });
+  else serverProcess.kill('SIGTERM');
   const forceExit = setTimeout(() => { serverProcess?.kill(); app.quit(); }, 2500);
   forceExit.unref();
 }
 
-app.on('before-quit', () => {
-  if (!stopping && serverProcess && serverProcess.exitCode === null) stopForge();
+app.on('before-quit', (event) => {
+  if (!stopping && serverProcess && serverProcess.exitCode === null) { event.preventDefault(); stopForge(); }
 });
 app.on('will-quit', () => {
   computerHost?.kill();

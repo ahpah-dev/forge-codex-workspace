@@ -254,6 +254,7 @@
           <button class="provider-preset" data-provider-preset="nvidia" type="button"><span class="provider-preset-mark nvidia-mark">N</span><span>NVIDIA NIM</span></button>
           <button class="provider-preset" data-provider-preset="groq" type="button"><span class="provider-preset-mark groq-mark">G</span><span>Groq Free</span></button>
           <button class="provider-preset" data-provider-preset="kilo-free" type="button"><span class="provider-preset-mark kilo-mark">K</span><span>Kilo Free Router</span></button>
+          <button class="provider-preset" data-provider-preset="omniroute" type="button"><span class="provider-preset-mark omni-mark">O</span><span>OmniRoute Local</span></button>
           <button class="provider-preset" data-provider-preset="custom" type="button"><span class="provider-preset-mark custom-mark">＋</span><span>Custom</span></button>
         </div>
         <label class="dialog-field"><span>Provider name</span><input id="provider-name" type="text" maxlength="48" autocomplete="off" placeholder="My inference endpoint"></label>
@@ -265,6 +266,12 @@
         <div class="provider-protocol-note" id="groq-setup-note" hidden>Free-plan coding models · API key required. <a href="https://console.groq.com/keys" target="_blank" rel="noopener noreferrer">Get a Groq key ↗</a> · <a href="https://console.groq.com/docs/rate-limits" target="_blank" rel="noopener noreferrer">View limits ↗</a><br>Groq's free plan has token and request limits. Large projects or long chats may exceed them. A paid Groq account follows its own billing; Forge cannot determine your plan from the model catalog.</div>
         <div class="provider-protocol-note" id="kilo-setup-note" hidden>Hosted automatic routing · one Kilo key. <a href="https://app.kilo.ai/" target="_blank" rel="noopener noreferrer">Get your key ↗</a> from Your Profile → bottom of page.<br>This preset uses only <code>kilo-auto/free</code>. Kilo chooses from its currently available free models; rate limits and availability apply. Auto Free may send code to providers that log prompts for service improvement. <a href="https://kilo.ai/docs/getting-started/using-kilo-for-free" target="_blank" rel="noopener noreferrer">Free route and data terms ↗</a></div>
         <div class="dialog-error" id="provider-error" hidden></div>
+        <div class="omniroute-setup" id="omniroute-setup" hidden>
+          <div class="omniroute-heading"><span class="provider-preset-mark omni-mark">O</span><div><strong>Your local AI router</strong><small id="omniroute-status" role="status">Checking connection…</small></div></div>
+          <p>Free, open source gateway with automatic routing and provider fallback. Forge installs it in its own local data folder. The initial download is large and may take a few minutes.</p>
+            <p>Connect free providers in its dashboard. The default coding and fast routes use the free model pool and stop when none are available. Connected accounts keep their own quotas; other route choices may be billable. Your ChatGPT sign-in stays in Forge.</p>
+          <div class="omniroute-actions"><button class="quiet-button" id="omniroute-start" type="button">Install &amp; start</button><a class="quiet-button" href="http://127.0.0.1:20128/dashboard" target="_blank" rel="noopener noreferrer">Open dashboard ↗</a></div>
+        </div>
         <div class="provider-billing-note"><span class="provider-lock" aria-hidden="true">◇</span><span>API keys stay in your local Windows secure store. Requests to custom providers use their billing and terms; your ChatGPT login remains connected.</span></div>
         <div class="dialog-actions"><button class="quiet-button" data-close-modal="providers-modal" type="button">Done</button><button class="primary-button" id="provider-save" type="button">Add provider</button></div>
       </section>

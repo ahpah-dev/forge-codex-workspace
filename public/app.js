@@ -383,6 +383,7 @@ function showProviderError(message) {
 }
 
 function resetProviderForm() {
+  $('#omniroute-setup').hidden = true;
   $('#provider-id').value = '';
   $('#provider-native-preset').value = '';
   $('#provider-models').readOnly = false;
@@ -423,7 +424,7 @@ function renderProviderList() {
     const mark = document.createElement('span');
     mark.className = `provider-entry-mark ${provider.id.includes('nvidia') ? 'nvidia' : ''}`.trim();
     mark.setAttribute('aria-hidden', 'true');
-    mark.textContent = provider.nativePreset === 'kilo-free' ? 'K' : provider.id.includes('nvidia') ? 'N' : provider.id.includes('openrouter') ? '◈' : baseUrl.includes('api.groq.com') ? 'G' : '◇';
+    mark.textContent = provider.nativePreset === 'omniroute' ? 'O' : provider.nativePreset === 'kilo-free' ? 'K' : provider.id.includes('nvidia') ? 'N' : provider.id.includes('openrouter') ? '◈' : baseUrl.includes('api.groq.com') ? 'G' : '◇';
     const copy = document.createElement('span');
     copy.className = 'provider-entry-copy';
     const name = document.createElement('strong');
@@ -433,7 +434,7 @@ function renderProviderList() {
     copy.append(name, endpoint);
     const status = document.createElement('span');
     status.className = 'provider-entry-state';
-    status.textContent = isFreeRoute ? (provider.authConfigured ? 'Keys saved' : 'Add routing keys') : provider.authConfigured ? 'Key saved' : 'Add API key';
+    status.textContent = provider.nativePreset === 'omniroute' ? 'Local gateway' : isFreeRoute ? (provider.authConfigured ? 'Keys saved' : 'Add routing keys') : provider.authConfigured ? 'Key saved' : 'Add API key';
     if (!provider.authConfigured) status.style.color = '#a15e49';
     const actions = document.createElement('span');
     actions.className = 'provider-entry-actions';
@@ -542,6 +543,7 @@ function selectProviderPreset(preset) {
     nvidia: { name: 'NVIDIA NIM', baseUrl: 'https://integrate.api.nvidia.com/v1', placeholder: 'nvapi-…', models: ['openai/gpt-oss-20b'] },
     groq: { name: 'Groq Free', baseUrl: 'https://api.groq.com/openai/v1', placeholder: 'gsk_…', models: ['openai/gpt-oss-120b', 'qwen/qwen3.8-27b', 'openai/gpt-oss-20b'] },
     'kilo-free': { name: 'Kilo Free Router', baseUrl: 'https://api.kilo.ai/api/gateway', placeholder: 'Paste your Kilo profile API key', models: ['kilo-auto/free'] },
+    omniroute: { name: 'OmniRoute Local', baseUrl: 'http://127.0.0.1:20128/v1', placeholder: 'Optional · key from your OmniRoute dashboard', models: ['auto/coding:free', 'auto/fast:free'] },
     custom: { name: '', baseUrl: '', placeholder: 'Paste provider API key' },
   };
   const value = presets[preset];
@@ -549,12 +551,15 @@ function selectProviderPreset(preset) {
   if (!$('#provider-id').value || preset === 'custom') $('#provider-name').value = value.name;
   $('#provider-base-url').value = value.baseUrl;
   const kiloFree = preset === 'kilo-free';
-  $('#provider-native-preset').value = kiloFree ? 'kilo-free' : '';
+  $('#provider-native-preset').value = kiloFree ? 'kilo-free' : preset === 'omniroute' ? 'omniroute' : '';
+  $('#omniroute-setup').hidden = preset !== 'omniroute';
+  if (preset === 'omniroute') void refreshOmniRoute();
+  $('#provider-key-hint').textContent = preset === 'omniroute' ? 'Optional for a local gateway without key authentication' : 'Stored encrypted on this Windows account';
   $('#provider-models').readOnly = kiloFree;
   $('#provider-base-url').readOnly = kiloFree;
-  $('#provider-api-format').disabled = kiloFree;
+  $('#provider-api-format').disabled = kiloFree || preset === 'omniroute';
   $('#kilo-setup-note').hidden = !kiloFree;
-  $('#provider-api-format').value = preset === 'groq' || kiloFree ? 'chat' : 'auto';
+  $('#provider-api-format').value = preset === 'groq' || kiloFree || preset === 'omniroute' ? 'chat' : 'auto';
   $('#groq-setup-note').hidden = preset !== 'groq';
   if (value.models) $('#provider-models').value = value.models.join('\n');
   else if (!$('#provider-id').value) $('#provider-models').value = '';
@@ -569,25 +574,49 @@ function editProvider(providerId) {
   $('#provider-id').value = provider.id;
   const kiloFree = provider.nativePreset === 'kilo-free';
   $('#provider-native-preset').value = provider.nativePreset || '';
+  $('#omniroute-setup').hidden = provider.nativePreset !== 'omniroute';
+  if (provider.nativePreset === 'omniroute') void refreshOmniRoute();
   $('#provider-models').readOnly = kiloFree;
   $('#provider-base-url').readOnly = kiloFree;
-  $('#provider-api-format').disabled = kiloFree;
+  $('#provider-api-format').disabled = kiloFree || provider.nativePreset === 'omniroute';
   $('#kilo-setup-note').hidden = !kiloFree;
   $('#provider-name').value = provider.name;
   $('#provider-base-url').value = provider.baseUrl;
   $('#provider-api-format').value = provider.apiFormat || 'auto';
   $('#provider-api-key').value = '';
-  $('#provider-api-key').placeholder = 'Leave blank to keep the saved key';
-  $('#provider-key-hint').textContent = provider.authConfigured ? 'A saved key is already encrypted locally' : 'Stored encrypted on this Windows account';
+  $('#provider-api-key').placeholder = provider.nativePreset === 'omniroute' ? 'Optional · leave blank to keep any saved key' : 'Leave blank to keep the saved key';
+  $('#provider-key-hint').textContent = provider.nativePreset === 'omniroute' ? 'Optional for a local gateway without key authentication' : provider.authConfigured ? 'A saved key is already encrypted locally' : 'Stored encrypted on this Windows account';
   $('#provider-models').value = provider.models.map((model) => model.id).join('\n');
   $('#provider-form-title').textContent = `Edit ${provider.name}`;
   $('#provider-save').textContent = 'Save provider';
   $('#provider-cancel-edit').hidden = false;
-  const preset = kiloFree ? 'kilo-free' : provider.baseUrl.includes('api.groq.com') ? 'groq' : provider.id.includes('nvidia') ? 'nvidia' : provider.id.includes('openrouter') ? 'openrouter' : 'custom';
+  const preset = provider.nativePreset === 'omniroute' ? 'omniroute' : kiloFree ? 'kilo-free' : provider.baseUrl.includes('api.groq.com') ? 'groq' : provider.id.includes('nvidia') ? 'nvidia' : provider.id.includes('openrouter') ? 'openrouter' : 'custom';
   $('#groq-setup-note').hidden = preset !== 'groq';
   $$('.provider-preset').forEach((button) => button.classList.toggle('selected', button.dataset.providerPreset === preset));
   showProviderError('');
   $('#provider-name').focus();
+}
+
+let omniRoutePoll;
+async function refreshOmniRoute() {
+  clearTimeout(omniRoutePoll);
+  if ($('#omniroute-setup').hidden || $('#providers-modal').hidden) return;
+  const button = $('#omniroute-start');
+  try {
+    const status = await api('/api/omniroute');
+    const busy = ['installing', 'starting'].includes(status.phase);
+    $('#omniroute-status').textContent = status.running ? 'Connected · local gateway ready' : status.error || (status.phase === 'installing' ? 'Downloading and installing the router…' : status.phase === 'starting' ? 'Starting your local gateway…' : status.installed ? 'Installed · ready to start' : 'Not installed yet');
+    $('#omniroute-setup').dataset.busy = String(busy);
+    button.disabled = busy || status.running;
+    button.textContent = status.running ? 'Running' : busy ? status.phase === 'installing' ? 'Installing…' : 'Starting…' : status.installed ? 'Start router' : 'Install & start';
+    if (busy) omniRoutePoll = setTimeout(refreshOmniRoute, 2000);
+  } catch (error) { $('#omniroute-status').textContent = error.message; button.disabled = false; }
+}
+async function startOmniRoute() {
+  $('#omniroute-start').disabled = true;
+  $('#omniroute-status').textContent = 'Preparing your local router…';
+  try { await api('/api/omniroute/start', { method: 'POST', body: {} }); await refreshOmniRoute(); }
+  catch (error) { $('#omniroute-status').textContent = error.message; $('#omniroute-start').disabled = false; }
 }
 
 async function discoverProviderModels() {
@@ -4534,6 +4563,7 @@ $('#model-search').addEventListener('keydown', (event) => {
 $('#manage-providers').addEventListener('click', openProvidersDialog);
 $('#anthropic-connect').addEventListener('click', () => { void connectAnthropic(); });
 $$('.provider-preset').forEach((button) => button.addEventListener('click', () => selectProviderPreset(button.dataset.providerPreset)));
+$('#omniroute-start').addEventListener('click', startOmniRoute);
 $('#provider-discover').addEventListener('click', discoverProviderModels);
 $('#provider-save').addEventListener('click', saveProvider);
 $('#provider-cancel-edit').addEventListener('click', resetProviderForm);

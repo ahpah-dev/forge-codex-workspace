@@ -27,7 +27,7 @@ test('provider setup opens with Free Auto Route enabled, long catalogs, small wi
     await page.goto(url);await page.waitForSelector('#prompt-input');
     await page.waitForFunction(()=>state.providers.some(provider=>provider.id==='forge-free'));
     // Freeze model refreshes while exercising realistic catalog extremes.
-    await page.evaluate(()=>{refreshState=async()=>{};});
+    await page.evaluate(()=>{window.originalRefreshState=refreshState;refreshState=async()=>{};});
     for (const scenario of [{width:1440,height:960,count:100,shape:'rounded'}, {width:900,height:640,count:100,shape:'pill'}, {width:900,height:640,count:0,shape:'rounded'}]) {
       await page.setViewportSize({width:scenario.width,height:scenario.height});
       await page.evaluate(({count,shape})=>{
@@ -53,6 +53,30 @@ test('provider setup opens with Free Auto Route enabled, long catalogs, small wi
       assert.equal(await page.locator('#free-routing-enabled').evaluate(element=>element===document.activeElement),true);
       await page.locator('#appearance-close').click();
     }
+    await page.route('**/api/omniroute',route=>route.fulfill({contentType:'application/json',body:JSON.stringify({phase:'idle',running:false,installed:false})}));
+    await page.evaluate(()=>{refreshState=window.originalRefreshState;openProvidersDialog();});
+    await page.locator('[data-provider-preset="omniroute"]').click();
+    assert.equal(await page.locator('#omniroute-setup').isVisible(),true);
+    await page.waitForFunction(()=>document.querySelector('#omniroute-status').textContent==='Not installed yet');
+    assert.equal(await page.locator('#provider-base-url').inputValue(),'http://127.0.0.1:20128/v1');
+    assert.equal(await page.locator('#provider-models').inputValue(),'auto/coding:free\nauto/fast:free');
+    assert.equal(await page.locator('#provider-api-format').isDisabled(),true);
+    assert.equal(await page.locator('#provider-api-key').inputValue(),'');
+    await page.locator('#provider-save').click();
+    await page.waitForFunction(()=>state.providers.some(provider=>provider.nativePreset==='omniroute'));
+    const saved=JSON.parse(await fs.readFile(path.join(profile,'settings.json'),'utf8')).providers.find(provider=>provider.nativePreset==='omniroute');
+    assert.equal(saved.apiFormat,'chat');assert.equal(saved.models[0].id,'auto/coding:free');
+    const localId=await page.evaluate(()=>state.providers.find(provider=>provider.nativePreset==='omniroute').id);
+    await page.locator(`[data-provider-edit="${localId}"]`).click();
+    assert.match(await page.locator('#provider-key-hint').innerText(),/Optional/);
+    await page.route('**/api/omniroute/start',route=>route.fulfill({status:202,contentType:'application/json',body:JSON.stringify({phase:'installing'})}));
+    await page.route('**/api/omniroute',route=>route.fulfill({contentType:'application/json',body:JSON.stringify({phase:'installing',running:false,installed:false})}));
+    await page.locator('#omniroute-start').click();
+    await page.waitForFunction(()=>document.querySelector('#omniroute-start').textContent==='Installing…');
+    assert.equal(await page.locator('#omniroute-start').isDisabled(),true);
+    await page.locator('[data-provider-preset="nvidia"]').click();
+    assert.equal(await page.locator('#omniroute-setup').isVisible(),false);
+    assert.equal(await page.locator('#provider-api-format').isDisabled(),false);
     assert.deepEqual(errors,[]);
   } finally {
     await browser?.close();child.kill();

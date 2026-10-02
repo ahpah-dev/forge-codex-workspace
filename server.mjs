@@ -10,8 +10,9 @@ import { promisify } from 'node:util';
 import { decryptProviderKey, encryptProviderKey, readEncryptedProviderKeys, writeEncryptedProviderKeys } from './provider-secrets.mjs';
 import { createAnthropicProvider } from './anthropic-provider.mjs';
 import { createFreeRouter, FREE_PROVIDER_ID, FREE_KEY_IDS, isCodexLimitError, exhaustedCodexLimit } from './free-router.mjs';
-import { bridgeResponses, createChatProviderRouter, providerApiFormat, GROQ_CODING_MODELS, isGroqProvider, KILO_FREE_BASE_URL, KILO_FREE_MODEL } from './responses-bridge.mjs';
+import { bridgeResponses, createChatProviderRouter, providerApiFormat, providerBaseInstructions, GROQ_CODING_MODELS, isGroqProvider, KILO_FREE_BASE_URL, KILO_FREE_MODEL } from './responses-bridge.mjs';
 import { browserCodexConfig, browserCodexArgs, computerUseInstructions } from './browser-config.mjs';
+import { createOmniRouteManager, isLocalOmniRoute, OMNIROUTE_BASE_URL } from './omniroute-manager.mjs';
 import './public/question-protocol.js';
 import './public/plugin-protocol.js';
 import './public/file-paths.js';
@@ -23,6 +24,7 @@ const dataRoot = process.env.FORGE_DATA_DIR || path.join(appRoot, 'data');
 const settingsPath = path.join(dataRoot, 'settings.json');
 const providerKeysPath = path.join(dataRoot, 'provider-secrets.json');
 const providerAuthScript = path.join(appRoot, 'provider-auth.mjs');
+const omniRoute = createOmniRouteManager({ appRoot, dataRoot });
 const bundledCodexCli = path.join(appRoot, 'node_modules', '@openai', 'codex', 'bin', 'codex.js');
 const codexExecutable = process.env.CODEX_CLI || (existsSync(bundledCodexCli) ? process.execPath : 'codex');
 const codexPrefixArgs = process.env.CODEX_CLI || !existsSync(bundledCodexCli) ? [] : [bundledCodexCli];
@@ -53,8 +55,10 @@ const turnErrors = new Map();
 const fallbackJobs = new Map();
 const pendingComputerUse = new Map();
 let computerUseQueue = Promise.resolve();
+let shuttingDown = false;
 
 process.on('message', (message) => {
+  if (message?.type === 'forge:shutdown') { void shutdownForge(); return; }
   if (message?.type !== 'forge:computer-use-result' || !message.id) return;
   const pending = pendingComputerUse.get(message.id);
   if (!pending) return;
@@ -116,7 +120,7 @@ async function loadSettings() {
       name: String(provider.name || provider.id).slice(0, 48),
       baseUrl: String(provider.baseUrl || ''),
       apiFormat: ['auto', 'chat', 'responses'].includes(provider.apiFormat) ? provider.apiFormat : 'auto',
-      ...(provider.nativePreset === 'kilo-free' ? { nativePreset: 'kilo-free' } : {}),
+      ...(['kilo-free', 'omniroute'].includes(provider.nativePreset) ? { nativePreset: provider.nativePreset } : {}),
       models: Array.isArray(provider.models) ? provider.models.filter((model) => model && /^[\w./:@+-]{1,180}$/.test(model.id || '')).slice(0, 100).map((model) => ({ id: model.id, name: String(model.name || model.id).slice(0, 180) })) : [],
     })) : [];
     return { ...defaultSettings, ...saved, askExternalApprovals: saved.askExternalApprovals !== false, freeRouting: { enabled: saved.freeRouting?.enabled === true, codexFallback: saved.freeRouting?.codexFallback === true }, recentWorkspaces: Array.isArray(saved.recentWorkspaces) ? saved.recentWorkspaces : [], providers };
@@ -328,7 +332,7 @@ function providerIdFromName(value) {
 function publicProviders(encryptedKeys = {}) {
   const providers = settings.providers.map((provider) => ({
     ...provider,
-    authConfigured: typeof encryptedKeys[provider.id] === 'string' && Boolean(encryptedKeys[provider.id]),
+    authConfigured: isLocalOmniRoute(provider) || typeof encryptedKeys[provider.id] === 'string' && Boolean(encryptedKeys[provider.id]),
   }));
   if (settings.freeRouting.enabled) providers.push({ id: FREE_PROVIDER_ID, name: 'Free Auto Route', authConfigured: Boolean(encryptedKeys[FREE_KEY_IDS.openrouter] && encryptedKeys[FREE_KEY_IDS.nvidia]), models: [{ id: 'auto-free', name: 'OpenRouter Free Auto Route' }] });
   return providers;
@@ -594,7 +598,7 @@ class CodexAppServer {
       this.emit({ type: 'connection', connected: false, message: 'Codex connection closed.' });
     });
     await this.requestRaw('initialize', {
-      clientInfo: { name: 'forge_coding_workspace', title: 'Forge', version: process.env.FORGE_APP_VERSION || '1.0.40' },
+      clientInfo: { name: 'forge_coding_workspace', title: 'Forge', version: process.env.FORGE_APP_VERSION || '1.0.41' },
       capabilities: { experimentalApi: true },
     });
     this.notify('initialized', {});
@@ -799,7 +803,7 @@ async function startCodexTask(input, cwd, { announceContinuation, signal } = {})
   const encryptedKeys = await readEncryptedProviderKeys(providerKeysPath);
   if (providerId === FREE_PROVIDER_ID) {
     if (!settings.freeRouting.enabled || !encryptedKeys[FREE_KEY_IDS.openrouter] || !encryptedKeys[FREE_KEY_IDS.nvidia]) throw new Error('Enable Free Auto Route and save both API keys in Settings first.');
-  } else if (provider && !encryptedKeys[providerId]) throw new Error(`Add an API key for ${provider.name} in provider settings.`);
+  } else if (provider && !encryptedKeys[providerId] && !isLocalOmniRoute(provider)) throw new Error(`Add an API key for ${provider.name} in provider settings.`);
   if (!provider && !(await getAccount()).connected) throw new Error('Sign in to ChatGPT before starting a Codex task.');
   let threadId = String(input.threadId || '');
   if (threadId) {
@@ -813,7 +817,7 @@ async function startCodexTask(input, cwd, { announceContinuation, signal } = {})
   const approvalPolicy = officialCodex || !settings.askExternalApprovals || readOnly ? 'never' : 'on-request';
   if (signal?.aborted) throw new Error('The continuation was stopped.');
   if (!threadId) {
-    const startParams = { cwd, model, sandbox, approvalPolicy, personality: 'pragmatic', config: runtimeThreadConfig(provider, cwd) };
+    const startParams = { cwd, model, sandbox, approvalPolicy, personality: 'pragmatic', config: runtimeThreadConfig(provider, cwd), ...(providerBaseInstructions(provider) ? { baseInstructions: providerBaseInstructions(provider) } : {}) };
     if (provider) startParams.modelProvider = provider.id;
     threadId = (await codex.rpc('thread/start', startParams)).thread.id;
     invalidateThreadHistory(threadId);
@@ -1071,7 +1075,7 @@ function resumeThread(threadId) {
   const load = getThreadHistory(threadId).then((history) => {
     const provider = history.thread.modelProvider === FREE_PROVIDER_ID ? { id: FREE_PROVIDER_ID }
       : settings.providers.find((item) => item.id === history.thread.modelProvider);
-    return codex.rpc('thread/resume', { threadId, config: runtimeThreadConfig(provider, history.thread.cwd || activeWorkspace) });
+    return codex.rpc('thread/resume', { threadId, config: runtimeThreadConfig(provider, history.thread.cwd || activeWorkspace), ...(providerBaseInstructions(provider) ? { baseInstructions: providerBaseInstructions(provider) } : {}) });
   }).then((result) => {
     resumedThreads.add(threadId);
     return result;
@@ -1095,6 +1099,7 @@ async function openThread(threadId) {
 async function handleApi(req, res, url) {
   if (!requireSession(req)) return json(res, 403, { error: 'The local app session is invalid. Refresh Forge to reconnect.' });
   const route = url.pathname;
+  if (req.method === 'GET' && route === '/api/omniroute') return json(res, 200, await omniRoute.status());
   if (req.method === 'GET' && route === '/api/events') {
     res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
     res.write(': connected\n\n');
@@ -1270,9 +1275,15 @@ async function handleApi(req, res, url) {
         const results = await Promise.allSettled([freeRouter.catalog('openrouter', { force: true }), freeRouter.catalog('nvidia', { force: true })]);
         return json(res, 200, { catalogs: results.map((result, index) => ({ provider: index ? 'nvidia' : 'openrouter', ...(result.status === 'fulfilled' ? { count: result.value.length, model: result.value[0].id, name: result.value[0].name || result.value[0].id } : { error: result.reason.message }) })) });
       }
+      if (route === '/api/omniroute/start') {
+        omniRoute.installAndStart();
+        return json(res, 202, await omniRoute.status());
+      }
       if (route === '/api/providers/discover') {
         const baseUrl = normalizeProviderBaseUrl(input.baseUrl);
         const kiloFree = input.nativePreset === 'kilo-free';
+        const localOmni = isLocalOmniRoute({ nativePreset: input.nativePreset, baseUrl });
+        if (input.nativePreset === 'omniroute' && !localOmni) throw new Error('Local OmniRoute must use a loopback HTTP address.');
         if (kiloFree && baseUrl !== KILO_FREE_BASE_URL) throw new Error('Kilo Free Router requires the official Kilo gateway endpoint.');
         let apiKey = String(input.apiKey || '').trim();
         if (!apiKey && input.id) {
@@ -1280,15 +1291,15 @@ async function handleApi(req, res, url) {
           const encrypted = encryptedKeys[String(input.id)];
           if (encrypted) apiKey = await decryptProviderKey(encrypted);
         }
-        if (!apiKey) throw new Error('Enter the provider API key before loading models.');
+        if (!apiKey && !localOmni) throw new Error('Enter the provider API key before loading models.');
         const response = await fetch(`${baseUrl}/models`, {
-          headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' },
+          headers: { ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}), Accept: 'application/json' },
           signal: AbortSignal.timeout(15000),
         });
         if (!response.ok) throw new Error(`The provider model list returned HTTP ${response.status}. Check the endpoint and API key.`);
         const payload = await response.json();
         const rows = Array.isArray(payload?.data) ? payload.data : Array.isArray(payload?.models) ? payload.models : [];
-        const availableIds = [...new Set(rows.filter((model) => model?.active !== false).map((model) => String(model?.id || model?.name || '').trim()).filter((id) => /^[\w./:@+-]{1,180}$/.test(id)))].slice(0, 100);
+        const availableIds = [...new Set(rows.filter((model) => model?.active !== false).map((model) => String(model?.id || model?.name || '').trim()).filter((id) => /^[\w./:@+-]{1,180}$/.test(id)))].sort((a, b) => localOmni ? Number(b.startsWith('auto')) - Number(a.startsWith('auto')) : 0).slice(0, 100);
         const codingOnly = kiloFree || isGroqProvider({ baseUrl });
         const freeAlias = rows.find((model) => model?.id === KILO_FREE_MODEL);
         const freePrice = freeAlias?.pricing && ['prompt', 'completion'].every((field) => freeAlias.pricing[field] != null && String(freeAlias.pricing[field]).trim() !== '' && Number(freeAlias.pricing[field]) === 0);
@@ -1310,13 +1321,15 @@ async function handleApi(req, res, url) {
         }
         const baseUrl = normalizeProviderBaseUrl(input.baseUrl);
         const models = normalizeProviderModels(input.models);
-        const nativePreset = input.nativePreset === 'kilo-free' ? 'kilo-free' : undefined;
-        if (nativePreset && (baseUrl !== KILO_FREE_BASE_URL || models.some((model) => model.id !== KILO_FREE_MODEL))) throw new Error('Kilo Free Router is restricted to the official endpoint and kilo-auto/free.');
+        const nativePreset = ['kilo-free', 'omniroute'].includes(input.nativePreset) ? input.nativePreset : undefined;
+        if (nativePreset === 'kilo-free' && (baseUrl !== KILO_FREE_BASE_URL || models.some((model) => model.id !== KILO_FREE_MODEL))) throw new Error('Kilo Free Router is restricted to the official endpoint and kilo-auto/free.');
+        const localOmni = isLocalOmniRoute({ nativePreset, baseUrl });
+        if (nativePreset === 'omniroute' && !localOmni) throw new Error('Local OmniRoute must use a loopback HTTP address.');
         const apiKey = String(input.apiKey || '').trim();
         if (apiKey.length > 4096) throw new Error('Provider API keys must be 4,096 characters or fewer.');
         const encryptedKeys = await readEncryptedProviderKeys(providerKeysPath);
         if (apiKey) encryptedKeys[id] = await encryptProviderKey(apiKey);
-        if (!encryptedKeys[id]) throw new Error('Enter an API key for this provider.');
+        if (!encryptedKeys[id] && !localOmni) throw new Error('Enter an API key for this provider.');
         const apiFormat = ['auto', 'chat', 'responses'].includes(input.apiFormat) ? input.apiFormat : 'auto';
         const provider = { id, name, baseUrl, models, apiFormat: nativePreset ? 'chat' : apiFormat, ...(nativePreset ? { nativePreset } : {}) };
         await writeEncryptedProviderKeys(providerKeysPath, encryptedKeys);
@@ -1485,7 +1498,7 @@ async function handleApi(req, res, url) {
       }
       if (route === '/api/shutdown') {
         json(res, 200, { ok: true });
-        setTimeout(async () => { await codex.stop(); httpServer.close(() => process.exit(0)); }, 100);
+        setTimeout(() => { void shutdownForge(); }, 100);
         return;
       }
       return json(res, 404, { error: 'Route not found.' });
@@ -1535,7 +1548,12 @@ const httpServer = createServer(async (req, res) => {
         if (!provider.models.some((item) => item.id === input.model)) throw new Error('Choose a model saved for this provider.');
         const keys = await readEncryptedProviderKeys(providerKeysPath);
         const key = keys[provider.id] ? await decryptProviderKey(keys[provider.id]) : '';
-        if (!key) throw new Error(`Add your ${provider.name} API key in Settings.`);
+        if (!key && !isLocalOmniRoute(provider)) throw new Error(`Add your ${provider.name} API key in Settings.`);
+        if (isLocalOmniRoute(provider) && normalizeProviderBaseUrl(provider.baseUrl) === OMNIROUTE_BASE_URL) {
+          const status = await omniRoute.status();
+          if (!status.running && status.installed) await omniRoute.start();
+          else if (!status.running) throw new Error('Install and start OmniRoute in Manage providers first.');
+        }
         router = createChatProviderRouter({ provider: { ...provider, baseUrl: normalizeProviderBaseUrl(provider.baseUrl) }, model: input.model, key });
       }
       await bridgeResponses({ input, res, router, signal: AbortSignal.any([controller.signal, AbortSignal.timeout(600000)]) });
@@ -1599,10 +1617,13 @@ const accountWarmup = codex.ensureStarted()
 await Promise.race([accountWarmup, new Promise((resolve) => setTimeout(resolve, 1500))]);
 openBrowser(localUrl);
 
-for (const signal of ['SIGINT', 'SIGTERM']) {
-  process.on(signal, async () => {
-    await codex.stop();
-    httpServer.close(() => process.exit(0));
-    setTimeout(() => process.exit(0), 1200).unref();
-  });
+async function shutdownForge() {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  await omniRoute.stop();
+  setTimeout(() => process.exit(0), 1800).unref();
+  await codex.stop();
+  httpServer.close(() => process.exit(0));
 }
+for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => { void shutdownForge(); });
+process.on('disconnect', () => { void shutdownForge(); });
