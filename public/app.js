@@ -87,7 +87,7 @@ function createOpenAIMark() {
 document.querySelector('.welcome-mark')?.append(createOpenAIMark());
 
 function getModelTier(modelId = '', providerId = '') {
-  if (providerId) return providerId.toLowerCase().includes('groq') ? 'groq' : providerId.toLowerCase().includes('nvidia') ? 'nvidia' : 'provider';
+  if (providerId) return providerId.toLowerCase().includes('kilo') ? 'kilo' : providerId.toLowerCase().includes('groq') ? 'groq' : providerId.toLowerCase().includes('nvidia') ? 'nvidia' : 'provider';
   const id = String(modelId).toLowerCase();
   if (id.includes('astra')) return 'astra';
   if (id.includes('sol')) return 'sol';
@@ -110,6 +110,12 @@ function createModelIcon(modelId, providerId = '') {
     svg.querySelector('path')?.setAttribute('stroke', 'currentColor');
     svg.querySelector('path')?.setAttribute('stroke-width', '1.5');
     svg.querySelector('path')?.setAttribute('fill-rule', 'evenodd');
+  } else if (tier === 'kilo') {
+    appendPath('M6 4v16M18 4l-8 8 8 8', 'none');
+    svg.lastChild.setAttribute('stroke', 'currentColor');
+    svg.lastChild.setAttribute('stroke-width', '2');
+    svg.lastChild.setAttribute('stroke-linecap', 'round');
+    svg.lastChild.setAttribute('stroke-linejoin', 'round');
   } else if (tier === 'groq') {
     appendPath('M18.7 7a8 8 0 1 0 1 9.4V12h-7', 'none');
     svg.lastChild.setAttribute('stroke', 'currentColor');
@@ -378,6 +384,11 @@ function showProviderError(message) {
 
 function resetProviderForm() {
   $('#provider-id').value = '';
+  $('#provider-native-preset').value = '';
+  $('#provider-models').readOnly = false;
+  $('#provider-base-url').readOnly = false;
+  $('#provider-api-format').disabled = false;
+  $('#kilo-setup-note').hidden = true;
   $('#provider-name').value = '';
   $('#provider-base-url').value = '';
   $('#provider-api-format').value = 'auto';
@@ -409,7 +420,7 @@ function renderProviderList() {
     const mark = document.createElement('span');
     mark.className = `provider-entry-mark ${provider.id.includes('nvidia') ? 'nvidia' : ''}`.trim();
     mark.setAttribute('aria-hidden', 'true');
-    mark.textContent = provider.id.includes('nvidia') ? 'N' : provider.id.includes('openrouter') ? '◈' : provider.baseUrl.includes('api.groq.com') ? 'G' : '◇';
+    mark.textContent = provider.nativePreset === 'kilo-free' ? 'K' : provider.id.includes('nvidia') ? 'N' : provider.id.includes('openrouter') ? '◈' : provider.baseUrl.includes('api.groq.com') ? 'G' : '◇';
     const copy = document.createElement('span');
     copy.className = 'provider-entry-copy';
     const name = document.createElement('strong');
@@ -515,13 +526,20 @@ function selectProviderPreset(preset) {
     openrouter: { name: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1', placeholder: 'sk-or-…' },
     nvidia: { name: 'NVIDIA NIM', baseUrl: 'https://integrate.api.nvidia.com/v1', placeholder: 'nvapi-…' },
     groq: { name: 'Groq Free', baseUrl: 'https://api.groq.com/openai/v1', placeholder: 'gsk_…', models: ['openai/gpt-oss-120b', 'qwen/qwen3.8-27b', 'openai/gpt-oss-20b'] },
+    'kilo-free': { name: 'Kilo Free Router', baseUrl: 'https://api.kilo.ai/api/gateway', placeholder: 'Paste your Kilo profile API key', models: ['kilo-auto/free'] },
     custom: { name: '', baseUrl: '', placeholder: 'Paste provider API key' },
   };
   const value = presets[preset];
   if (!value) return;
   if (!$('#provider-id').value || preset === 'custom') $('#provider-name').value = value.name;
   $('#provider-base-url').value = value.baseUrl;
-  $('#provider-api-format').value = preset === 'groq' ? 'chat' : 'auto';
+  const kiloFree = preset === 'kilo-free';
+  $('#provider-native-preset').value = kiloFree ? 'kilo-free' : '';
+  $('#provider-models').readOnly = kiloFree;
+  $('#provider-base-url').readOnly = kiloFree;
+  $('#provider-api-format').disabled = kiloFree;
+  $('#kilo-setup-note').hidden = !kiloFree;
+  $('#provider-api-format').value = preset === 'groq' || kiloFree ? 'chat' : 'auto';
   $('#groq-setup-note').hidden = preset !== 'groq';
   if (value.models) $('#provider-models').value = value.models.join('\n');
   else if (!$('#provider-id').value) $('#provider-models').value = '';
@@ -533,6 +551,12 @@ function editProvider(providerId) {
   const provider = state.providers.find((item) => item.id === providerId);
   if (!provider) return;
   $('#provider-id').value = provider.id;
+  const kiloFree = provider.nativePreset === 'kilo-free';
+  $('#provider-native-preset').value = provider.nativePreset || '';
+  $('#provider-models').readOnly = kiloFree;
+  $('#provider-base-url').readOnly = kiloFree;
+  $('#provider-api-format').disabled = kiloFree;
+  $('#kilo-setup-note').hidden = !kiloFree;
   $('#provider-name').value = provider.name;
   $('#provider-base-url').value = provider.baseUrl;
   $('#provider-api-format').value = provider.apiFormat || 'auto';
@@ -543,7 +567,7 @@ function editProvider(providerId) {
   $('#provider-form-title').textContent = `Edit ${provider.name}`;
   $('#provider-save').textContent = 'Save provider';
   $('#provider-cancel-edit').hidden = false;
-  const preset = provider.baseUrl.includes('api.groq.com') ? 'groq' : provider.id.includes('nvidia') ? 'nvidia' : provider.id.includes('openrouter') ? 'openrouter' : 'custom';
+  const preset = kiloFree ? 'kilo-free' : provider.baseUrl.includes('api.groq.com') ? 'groq' : provider.id.includes('nvidia') ? 'nvidia' : provider.id.includes('openrouter') ? 'openrouter' : 'custom';
   $('#groq-setup-note').hidden = preset !== 'groq';
   $$('.provider-preset').forEach((button) => button.classList.toggle('selected', button.dataset.providerPreset === preset));
   showProviderError('');
@@ -560,6 +584,7 @@ async function discoverProviderModels() {
       id: $('#provider-id').value,
       baseUrl: $('#provider-base-url').value,
       apiKey: $('#provider-api-key').value,
+      nativePreset: $('#provider-native-preset').value,
     } });
     const current = $('#provider-models').value.split(/[\r\n,]+/).map((item) => item.trim()).filter(Boolean);
     $('#provider-models').value = (result.codingOnly ? result.modelIds : [...new Set([...current, ...result.modelIds])]).join('\n');
@@ -580,6 +605,7 @@ async function saveProvider() {
     await api('/api/providers/save', { method: 'POST', body: {
       id: $('#provider-id').value,
       name: $('#provider-name').value,
+      nativePreset: $('#provider-native-preset').value,
       baseUrl: $('#provider-base-url').value,
       apiKey: $('#provider-api-key').value,
       models: $('#provider-models').value,

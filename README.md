@@ -24,7 +24,7 @@ File edits appear in expandable code cards with line numbers and additions/remov
 
 Download the latest Windows x64 installer from [GitHub Releases](https://github.com/davidegeric-cloud/forge-codex-workspace/releases/latest). Run the installer, then launch Forge from the Start menu or desktop shortcut. Sign in to Codex once in the Codex app or Codex CLI; Forge uses that saved local account automatically.
 
-To build the installer yourself, use Node.js 18 or newer on Windows x64, run `npm install`, then `npm run dist:win`. The installer is written to `release/Forge-Setup-1.0.36-x64.exe`. The desktop app bundles its Codex runtime and does not need a global Node.js install.
+To build the installer yourself, use Node.js 18 or newer on Windows x64, run `npm install`, then `npm run dist:win`. The installer is written to `release/Forge-Setup-1.0.37-x64.exe`. The desktop app bundles its Codex runtime and does not need a global Node.js install.
 
 ## Start from source
 
@@ -60,6 +60,8 @@ Use **Manage providers** to add OpenRouter, NVIDIA NIM, or another service that 
 **Computer-use connection:** Forge desktop has its own Windows controller, separate from the Codex desktop plugin's connected-app inventory. Models can call `computer_use_connection` to inspect the native helper, Windows windows, displays, and Forge browser pages, including precise errors and recovery guidance. An empty app or tab list does not prevent opening a requested folder in File Explorer with `computer_use_open` or creating a browser page with `browser_open`. External Chrome/Edge windows use the desktop tools; `browser_tabs` lists Forge's embedded pages only. These recovery instructions apply to Codex, custom providers, and Claude. Native desktop input requires the Windows desktop app; the browser-only server supplies browser tools.
 
 ## Workspace and appearance
+
+**Kilo Free Router:** Select **Manage providers → Kilo Free Router**, then paste your Kilo Gateway key from [Your Profile at app.kilo.ai](https://app.kilo.ai/) and save. This hosted integration needs one key and no local router installation. It uses only `kilo-auto/free`; Kilo selects underlying models from its current curated free pool. The native preset locks the endpoint/model, validates those restrictions when saving and making requests, and keeps its free-only setting after restarting Forge. **Load models** checks that the live route has zero prompt/completion price and supports tools. File, shell, browser, and question calls run through Forge's existing executor. Your ChatGPT login remains connected. Availability and upstream rate limits apply; failures do not switch to a paid Kilo tier. Auto Free may route code to providers that log prompts and outputs for improvement; see [Kilo's free usage and data terms](https://kilo.ai/docs/getting-started/using-kilo-for-free). Kilo's [coding client is open source](https://github.com/Kilo-Org/kilocode); this integration uses its hosted gateway, not a self-hosted router.
 
 Drag the grip at the top of the chatbox to adjust its text area height, or focus the grip and use the arrow keys. Double-click it (or press Home/Enter) to restore automatic height. **Settings → Chatbox** saves your preferred height and Rounded, Pill, or Square shape on this device.
 

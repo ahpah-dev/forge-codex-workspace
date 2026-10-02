@@ -3,6 +3,8 @@ import { randomUUID } from 'node:crypto';
 // Documented free-plan coding models; discovery intersects this list with the
 // authenticated catalog, which does not expose the account's billing plan.
 export const GROQ_CODING_MODELS = ['openai/gpt-oss-120b', 'qwen/qwen3.8-27b', 'openai/gpt-oss-20b'];
+export const KILO_FREE_BASE_URL = 'https://api.kilo.ai/api/gateway';
+export const KILO_FREE_MODEL = 'kilo-auto/free';
 export function isGroqProvider(provider) {
   try { return new URL(provider.baseUrl).hostname.toLowerCase() === 'api.groq.com'; }
   catch { return false; }
@@ -143,7 +145,7 @@ export function providerApiFormat(provider) {
   if (provider.apiFormat === 'chat' || provider.apiFormat === 'responses') return provider.apiFormat;
   try {
     const hostname = new URL(provider.baseUrl).hostname.toLowerCase();
-    if (hostname === 'integrate.api.nvidia.com' || hostname === 'openrouter.ai' || hostname === 'api.groq.com') return 'chat';
+    if (hostname === 'integrate.api.nvidia.com' || hostname === 'openrouter.ai' || hostname === 'api.groq.com' || hostname === 'api.kilo.ai') return 'chat';
   } catch { /* Invalid saved endpoints are rejected before making a request. */ }
   return 'responses';
 }
@@ -152,7 +154,13 @@ export function createChatProviderRouter({ provider, model, key, fetchImpl = fet
   let tokenLimit = 32768;
   return {
     async openCompletion(request, signal, { maxTokens = 16384 } = {}) {
+      if (provider.nativePreset === 'kilo-free' && (provider.baseUrl !== KILO_FREE_BASE_URL || model !== KILO_FREE_MODEL)) throw new Error('Kilo Free Router can only use the official gateway and kilo-auto/free. Reconfigure the provider in Settings.');
       const body = { ...request, model, stream: true, max_tokens: Math.min(maxTokens, tokenLimit) };
+      if (provider.nativePreset === 'kilo-free') {
+        // Keep Kilo's server-side free routing intact; never supply paid fallback
+        // models, BYOK overrides, or provider preferences from the client.
+        for (const field of ['provider', 'models', 'fallbacks', 'route', 'providerOptions', 'parallel_tool_calls']) delete body[field];
+      }
       if (isGroqProvider(provider)) {
         body.max_tokens = Math.min(body.max_tokens, 4096);
         // GPT-OSS does not support parallel tool calls on Groq. Keep local file,
@@ -187,6 +195,7 @@ export function createChatProviderRouter({ provider, model, key, fetchImpl = fet
         const detail = rejectedDetail || await response.json().catch(() => ({}));
         const explanation = String(detail.error?.message || detail.message || (typeof detail.detail === 'string' ? detail.detail : '')).replaceAll(key, '[redacted]').slice(0, 500);
         const hint = [401, 403].includes(response.status) ? 'Check your API key and model access in Settings.'
+          : provider.nativePreset === 'kilo-free' && [402, 429, 503].includes(response.status) ? 'Kilo Auto Free is limited or temporarily unavailable. Wait or select another free provider; Forge will not switch this preset to a paid route.'
           : response.status === 429 ? (isGroqProvider(provider) ? 'Groq’s request or token limit was reached. Try a shorter task or a new chat with less context, or wait for your quota to reset. Check your Groq account limits.' : 'The provider rate limit was reached. Wait before retrying.')
             : [400, 422].includes(response.status) ? 'Choose a model that supports tool calling and this message type.'
               : response.status === 202 ? 'The provider queued this request instead of returning a live stream. Retry with a streaming model.' : '';

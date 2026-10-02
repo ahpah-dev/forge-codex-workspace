@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.37
+
+- Add native Kilo Gateway Auto Free routing with a single Kilo API key and guided setup.
+- Restrict the native preset to the official gateway and kilo-auto/free, including saved configuration and inference requests.
+- Validate the free route against live pricing/tool support during discovery; preserve server-side dynamic model selection.
+- Add Kilo branding, quota/unavailability errors, and upstream data-handling guidance.
+
 ## 1.0.36
 
 - Add a native Groq Free provider preset with key setup links, coding model defaults, and free-plan limits guidance.

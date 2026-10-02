@@ -10,7 +10,7 @@ import { promisify } from 'node:util';
 import { decryptProviderKey, encryptProviderKey, readEncryptedProviderKeys, writeEncryptedProviderKeys } from './provider-secrets.mjs';
 import { createAnthropicProvider } from './anthropic-provider.mjs';
 import { createFreeRouter, FREE_PROVIDER_ID, FREE_KEY_IDS, isCodexLimitError, exhaustedCodexLimit } from './free-router.mjs';
-import { bridgeResponses, createChatProviderRouter, providerApiFormat, GROQ_CODING_MODELS, isGroqProvider } from './responses-bridge.mjs';
+import { bridgeResponses, createChatProviderRouter, providerApiFormat, GROQ_CODING_MODELS, isGroqProvider, KILO_FREE_BASE_URL, KILO_FREE_MODEL } from './responses-bridge.mjs';
 import { browserCodexConfig, browserCodexArgs, computerUseInstructions } from './browser-config.mjs';
 import './public/question-protocol.js';
 import './public/plugin-protocol.js';
@@ -116,6 +116,7 @@ async function loadSettings() {
       name: String(provider.name || provider.id).slice(0, 48),
       baseUrl: String(provider.baseUrl || ''),
       apiFormat: ['auto', 'chat', 'responses'].includes(provider.apiFormat) ? provider.apiFormat : 'auto',
+      ...(provider.nativePreset === 'kilo-free' ? { nativePreset: 'kilo-free' } : {}),
       models: Array.isArray(provider.models) ? provider.models.filter((model) => model && /^[\w./:@+-]{1,180}$/.test(model.id || '')).slice(0, 100).map((model) => ({ id: model.id, name: String(model.name || model.id).slice(0, 180) })) : [],
     })) : [];
     return { ...defaultSettings, ...saved, askExternalApprovals: saved.askExternalApprovals !== false, freeRouting: { enabled: saved.freeRouting?.enabled === true, codexFallback: saved.freeRouting?.codexFallback === true }, recentWorkspaces: Array.isArray(saved.recentWorkspaces) ? saved.recentWorkspaces : [], providers };
@@ -593,7 +594,7 @@ class CodexAppServer {
       this.emit({ type: 'connection', connected: false, message: 'Codex connection closed.' });
     });
     await this.requestRaw('initialize', {
-      clientInfo: { name: 'forge_coding_workspace', title: 'Forge', version: process.env.FORGE_APP_VERSION || '1.0.36' },
+      clientInfo: { name: 'forge_coding_workspace', title: 'Forge', version: process.env.FORGE_APP_VERSION || '1.0.37' },
       capabilities: { experimentalApi: true },
     });
     this.notify('initialized', {});
@@ -1271,6 +1272,8 @@ async function handleApi(req, res, url) {
       }
       if (route === '/api/providers/discover') {
         const baseUrl = normalizeProviderBaseUrl(input.baseUrl);
+        const kiloFree = input.nativePreset === 'kilo-free';
+        if (kiloFree && baseUrl !== KILO_FREE_BASE_URL) throw new Error('Kilo Free Router requires the official Kilo gateway endpoint.');
         let apiKey = String(input.apiKey || '').trim();
         if (!apiKey && input.id) {
           const encryptedKeys = await readEncryptedProviderKeys(providerKeysPath);
@@ -1286,9 +1289,11 @@ async function handleApi(req, res, url) {
         const payload = await response.json();
         const rows = Array.isArray(payload?.data) ? payload.data : Array.isArray(payload?.models) ? payload.models : [];
         const availableIds = [...new Set(rows.filter((model) => model?.active !== false).map((model) => String(model?.id || model?.name || '').trim()).filter((id) => /^[\w./:@+-]{1,180}$/.test(id)))].slice(0, 100);
-        const codingOnly = isGroqProvider({ baseUrl });
-        const modelIds = codingOnly ? GROQ_CODING_MODELS.filter((id) => availableIds.includes(id)) : availableIds;
-        if (!modelIds.length) throw new Error('The provider returned no model IDs. Add model IDs manually.');
+        const codingOnly = kiloFree || isGroqProvider({ baseUrl });
+        const freeAlias = rows.find((model) => model?.id === KILO_FREE_MODEL);
+        const freePrice = freeAlias?.pricing && ['prompt', 'completion'].every((field) => freeAlias.pricing[field] != null && String(freeAlias.pricing[field]).trim() !== '' && Number(freeAlias.pricing[field]) === 0);
+        const modelIds = kiloFree ? (freePrice && freeAlias.supported_parameters?.includes('tools') ? [KILO_FREE_MODEL] : []) : codingOnly ? GROQ_CODING_MODELS.filter((id) => availableIds.includes(id)) : availableIds;
+        if (!modelIds.length) throw new Error(kiloFree ? 'Kilo Auto Free is not currently listed as a zero-price tool-capable route. Try again later; no paid route will be added.' : 'The provider returned no model IDs. Add model IDs manually.');
         return json(res, 200, { modelIds, codingOnly });
       }
       if (route === '/api/providers/save') {
@@ -1305,13 +1310,15 @@ async function handleApi(req, res, url) {
         }
         const baseUrl = normalizeProviderBaseUrl(input.baseUrl);
         const models = normalizeProviderModels(input.models);
+        const nativePreset = input.nativePreset === 'kilo-free' ? 'kilo-free' : undefined;
+        if (nativePreset && (baseUrl !== KILO_FREE_BASE_URL || models.some((model) => model.id !== KILO_FREE_MODEL))) throw new Error('Kilo Free Router is restricted to the official endpoint and kilo-auto/free.');
         const apiKey = String(input.apiKey || '').trim();
         if (apiKey.length > 4096) throw new Error('Provider API keys must be 4,096 characters or fewer.');
         const encryptedKeys = await readEncryptedProviderKeys(providerKeysPath);
         if (apiKey) encryptedKeys[id] = await encryptProviderKey(apiKey);
         if (!encryptedKeys[id]) throw new Error('Enter an API key for this provider.');
         const apiFormat = ['auto', 'chat', 'responses'].includes(input.apiFormat) ? input.apiFormat : 'auto';
-        const provider = { id, name, baseUrl, models, apiFormat };
+        const provider = { id, name, baseUrl, models, apiFormat: nativePreset ? 'chat' : apiFormat, ...(nativePreset ? { nativePreset } : {}) };
         await writeEncryptedProviderKeys(providerKeysPath, encryptedKeys);
         settings.providers = existing
           ? settings.providers.map((item) => item.id === id ? provider : item)
