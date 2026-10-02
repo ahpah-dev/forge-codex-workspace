@@ -10,7 +10,7 @@ export function browserMcpConfig(appRoot, dataRoot, cwd) {
         ELECTRON_RUN_AS_NODE: '1',
         FORGE_BROWSER_API_URL: process.env.FORGE_BROWSER_API_URL,
         FORGE_BROWSER_API_TOKEN: process.env.FORGE_BROWSER_API_TOKEN,
-        FORGE_APP_VERSION: process.env.FORGE_APP_VERSION || '1.0.33',
+        FORGE_APP_VERSION: process.env.FORGE_APP_VERSION || '1.0.34',
       },
     };
   }

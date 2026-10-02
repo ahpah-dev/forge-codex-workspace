@@ -65,6 +65,17 @@ ipcMain.handle('forge:connect-anthropic', async () => {
 });
 
 ipcMain.handle('forge:browser-command', async (_event, { action, params } = {}) => runBrowserCommand(action, params || {}));
+ipcMain.handle('forge:browser-transition-frame', async (event) => {
+  if (event.sender !== mainWindow?.webContents || !browserView || browserView.webContents.isDestroyed() || !browserVisible) return null;
+  if (!browserView.webContents.getURL() || browserView.webContents.getURL() === 'about:blank') return null;
+  const bounds = browserView.getBounds();
+  if (!bounds.width || !bounds.height) return null;
+  try {
+    const image = await browserView.webContents.capturePage();
+    if (image.isEmpty()) return null;
+    return { image: image.toDataURL(), width: bounds.width, height: bounds.height };
+  } catch { return null; }
+});
 ipcMain.handle('forge:browser-open-external', async () => {
   const url = browserView?.webContents.getURL() || '';
   if (!isBrowserUrl(url)) throw new Error('There is no web page to open yet.');

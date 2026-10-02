@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.34
+
+- Add a smooth browser-panel exit with a temporary native-page snapshot, chat-layout expansion, and an immediate reduced-motion path.
+- Cancel pending closes when reopening the panel and keep completed navigation from overriding the user's decision to close it.
+- Update the website's hero, social preview, and model-picker images with captures from the current desktop interface.
+
 ## 1.0.33
 
 - Register Forge's computer/browser MCP tools at Codex runtime startup as well as thread start/resume; refresh resumed sessions after runtime or plugin reconnection.

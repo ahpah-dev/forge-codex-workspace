@@ -168,6 +168,17 @@ function showToast(message, type = '') {
 const inAppBrowserAvailable = Boolean(window.ForgeDesktop?.computerUse);
 $('#browser-toggle').hidden = !inAppBrowserAvailable;
 let lastBrowserLayout = '';
+let browserModeRevision = 0;
+let browserCloseTimer;
+
+function clearBrowserCloseAnimation() {
+  clearTimeout(browserCloseTimer);
+  $('.main-column').classList.remove('browser-closing');
+  $('.main-column').style.removeProperty('--browser-close-width');
+  $('.main-column').style.removeProperty('--browser-close-top');
+  $('#browser-workspace').inert = false;
+  $('#browser-page-slot').querySelector('.browser-transition-frame')?.remove();
+}
 
 function updateBrowserLayout() {
   if (!inAppBrowserAvailable) return;
@@ -211,13 +222,54 @@ function renderBrowserState() {
   $('#browser-toggle').title = browser.active ? 'Return to chat · Ctrl+Shift+5' : 'In-app browser · Ctrl+Shift+5';
 }
 
-function setBrowserMode(active) {
+async function setBrowserMode(active) {
   if (!inAppBrowserAvailable) return;
+  const revision = ++browserModeRevision;
+  const column = $('.main-column');
+  const panel = $('#browser-workspace');
+  const wasVisible = !panel.hidden;
   state.browser.active = Boolean(active);
-  $('.main-column').classList.toggle('browser-mode', state.browser.active);
-  $('.main-column').classList.toggle('browser-expanded', state.browser.expanded);
-  $('#browser-workspace').hidden = !state.browser.active;
   renderBrowserState();
+  clearBrowserCloseAnimation();
+  if (!active && wasVisible && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    // Native WebContentsView pixels cannot animate with DOM CSS. Freeze a
+    // temporary frame, then hide the native view while the panel closes.
+    const frame = await Promise.race([
+      window.ForgeDesktop.captureBrowserTransition?.().catch(() => null),
+      new Promise((resolve) => setTimeout(() => resolve(null), 180)),
+    ]);
+    if (revision !== browserModeRevision) return;
+    if (frame?.image) {
+      const image = new Image();
+      image.className = 'browser-transition-frame';
+      image.alt = ''; image.setAttribute('aria-hidden', 'true');
+      image.src = frame.image;
+      image.style.width = `${frame.width}px`; image.style.height = `${frame.height}px`;
+      $('#browser-page-slot').append(image);
+      await Promise.race([image.decode().catch(() => {}), new Promise((resolve) => setTimeout(resolve, 80))]);
+      if (revision !== browserModeRevision) return;
+    }
+    column.style.setProperty('--browser-close-width', `${panel.getBoundingClientRect().width + 12}px`);
+    column.style.setProperty('--browser-close-top', `${panel.getBoundingClientRect().top - column.getBoundingClientRect().top}px`);
+    if (panel.contains(document.activeElement)) $('#browser-toggle').focus({ preventScroll: true });
+    panel.inert = true;
+    updateBrowserLayout();
+    // Establish the current pixel track before transitioning it to zero.
+    void column.offsetWidth;
+    column.classList.add('browser-closing');
+    column.style.setProperty('--browser-close-width', '0px');
+    browserCloseTimer = setTimeout(() => {
+      if (revision !== browserModeRevision) return;
+      panel.hidden = true;
+      column.classList.remove('browser-mode', 'browser-closing', 'browser-expanded');
+      clearBrowserCloseAnimation();
+      requestAnimationFrame(() => { updateBrowserLayout(); positionWelcomeSuggestions(); });
+    }, 280);
+    return;
+  }
+  column.classList.toggle('browser-mode', state.browser.active);
+  column.classList.toggle('browser-expanded', state.browser.active && state.browser.expanded);
+  panel.hidden = !state.browser.active;
   requestAnimationFrame(() => { updateBrowserLayout(); positionWelcomeSuggestions(); });
 }
 
@@ -226,7 +278,7 @@ async function runBrowserCommand(action, params = {}) {
   try {
     const result = await window.ForgeDesktop.browserCommand(action, params);
     if (result && typeof result === 'object') {
-      state.browser = { ...state.browser, ...result, active: true };
+      state.browser = { ...state.browser, ...result };
       renderBrowserState();
     }
     return result;
