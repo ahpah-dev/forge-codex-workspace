@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.40
+
+- Prevent Groq, Kilo, and other Chat Completions providers from receiving more than 128 tool definitions.
+- Keep file and shell functions visible, prioritize relevant and recent tools, and discover remaining plugin functions on demand.
+- Handle discovery inside Forge while retaining Codex execution, permissions, original namespaces, and complete schemas.
+- Reduce Groq tool-schema overhead, adjust oversized output reserves once, and respect short free-plan cooldowns before streaming.
+- Add catalog, discovery, permission, output recovery, and opt-in live provider file-operation checks.
+
 ## 1.0.39
 
 - Fix Manage providers failing to open when Free Auto Route is enabled: derived routing entries have no API base URL.

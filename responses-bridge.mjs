@@ -6,6 +6,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 export const GROQ_CODING_MODELS = ['openai/gpt-oss-120b', 'qwen/qwen3.8-27b', 'openai/gpt-oss-20b'];
 export const KILO_FREE_BASE_URL = 'https://api.kilo.ai/api/gateway';
 export const KILO_FREE_MODEL = 'kilo-auto/free';
+export const CHAT_TOOL_LIMIT = 128;
 export function isGroqProvider(provider) {
   try { return new URL(provider.baseUrl).hostname.toLowerCase() === 'api.groq.com'; }
   catch { return false; }
@@ -99,6 +100,71 @@ export function toChatRequest(input) {
   } : {}) }, toolMap, allowedToolNames: allowedNames };
 }
 
+// A Codex session can include hundreds of plugin functions. Chat Completions
+// endpoints accept at most 128. Keep core and relevant functions visible and
+// let the model discover the rest without dropping capabilities or permissions.
+export function createToolCatalog(request, { limit = CHAT_TOOL_LIMIT, maxSchemaChars = Infinity } = {}) {
+  if (!Number.isInteger(limit) || limit < 4 || limit > CHAT_TOOL_LIMIT) throw new Error('Tool catalog limit must be between 4 and 128.');
+  const catalog = request.tools || [];
+  if (catalog.length <= limit && JSON.stringify(catalog).length <= maxSchemaChars) return { request, discoveryName: null };
+  const byName = new Map(catalog.map((tool) => [tool.function.name, tool]));
+  let discoveryName = 'forge_search_tools';
+  while (byName.has(discoveryName)) discoveryName += '_';
+  const discovery = { type: 'function', function: {
+    name: discoveryName,
+    description: 'Find available plugin or workspace tools by action, provider, or function name. Matching tools become callable in the next inference. Search when a needed tool is not currently listed.',
+    parameters: { type: 'object', properties: { query: { type: 'string' }, limit: { type: 'integer', minimum: 1, maximum: 32 } }, required: ['query'], additionalProperties: false },
+  } };
+  const tokenize = (text) => [...new Set(String(text).toLowerCase().split(/[^a-z0-9]+/).filter((word) => word.length > 1))];
+  const score = (tool, words) => {
+    const name = tool.function.name.toLowerCase();
+    const description = String(tool.function.description || '').toLowerCase();
+    return words.reduce((sum, word) => sum + (name.includes(word) ? 8 : description.includes(word) ? 1 : 0), 0);
+  };
+  const core = (name) => /(?:^|__)(?:exec_command|write_stdin|apply_patch|read_file|write_file|edit_file|request_user_input|send_user_message_async|update_plan|spawn_agent|send_message|wait_agent|list_agents|forge_write_file|forge_edit_file)$/.test(name)
+    || /(?:browser|computer|cua)[_]/i.test(name);
+  const files = (name) => /(?:^|__)(?:exec_command|write_stdin|apply_patch|read_file|write_file|edit_file|forge_write_file|forge_edit_file)$/.test(name);
+  const selected = new Set();
+  function prepare(messages) {
+    const recent = new Set(messages.slice(-40).flatMap((message) => (message.tool_calls || []).map((call) => call.function.name)));
+    const lastUser = messages.findLast((message) => message.role === 'user');
+    const words = tokenize(typeof lastUser?.content === 'string' ? lastUser.content : JSON.stringify(lastUser?.content || ''));
+    const ranked = catalog.map((tool, index) => ({ tool, index, score: (selected.has(tool.function.name) ? 100000 : 0)
+      + (files(tool.function.name) ? 20000 : core(tool.function.name) ? 10000 : 0) + (recent.has(tool.function.name) ? 1000 : 0) + score(tool, words) }));
+    ranked.sort((a, b) => b.score - a.score || a.index - b.index);
+    let chars = JSON.stringify(discovery).length;
+    const active = [];
+    for (const { tool } of ranked) {
+      if (active.length >= limit - 1) break;
+      const size = JSON.stringify(tool).length;
+      if (chars + size > maxSchemaChars && !selected.has(tool.function.name)) continue;
+      active.push(tool); chars += size;
+    }
+    return { ...request, messages, tools: [...active, discovery] };
+  }
+  const messages = [{ role: 'system', content: `This session has ${catalog.length} available functions. Only a relevant subset is listed per inference. If you need a function that is not listed, call ${discoveryName} with its action, provider, or name; then call the matching function normally. Discovery searches only the functions permitted for this request.` }, ...request.messages];
+  return {
+    request: prepare(messages), discoveryName,
+    search(args) {
+      if (!args || typeof args.query !== 'string' || !args.query.trim() || args.query.length > 500
+        || (args.limit !== undefined && (!Number.isInteger(args.limit) || args.limit < 1 || args.limit > 32))) throw new Error('Tool search requires a query and an optional limit from 1 to 32.');
+      const words = tokenize(args.query);
+      const matches = catalog.map((tool, index) => ({ tool, index, score: score(tool, words) }))
+        .filter((entry) => entry.score > 0).sort((a, b) => b.score - a.score || a.index - b.index).slice(0, Math.min(args.limit || 12, limit - 1));
+      selected.clear();
+      for (const { tool } of matches) selected.add(tool.function.name);
+      // Search returns short metadata; complete definitions are advertised in
+      // the next request, avoiding a second copy of lengthy plugin guidance.
+      return { tools: matches.map(({ tool }) => ({ name: tool.function.name, description: String(tool.function.description || '').slice(0, 512) })), message: matches.length ? 'These functions are now available. Call the matching function using its listed parameters.' : 'No permitted functions matched. Try a different action or provider name.' };
+    },
+    prepare,
+  };
+}
+
+function normalizeToolName(name) {
+  return name.replace(/<\|channel\|>(?:analysis|commentary|final|json)(?:json|<\|constrain\|>json)?$/, '');
+}
+
 function recoverFileOperationCall(item, toolMap) {
   if (item.name !== 'exec_command') return null;
   try {
@@ -180,9 +246,13 @@ export function providerApiFormat(provider) {
   return 'responses';
 }
 
-export function createChatProviderRouter({ provider, model, key, fetchImpl = fetch }) {
+export function createChatProviderRouter({ provider, model, key, fetchImpl = fetch, waitImpl = delay }) {
   let tokenLimit = 32768;
   return {
+    // Free Groq accounts have a small combined prompt/output token allowance.
+    // A smaller active catalog leaves room for the task and full instructions.
+    toolLimit: isGroqProvider(provider) ? 32 : CHAT_TOOL_LIMIT,
+    toolSchemaBudget: isGroqProvider(provider) ? 5000 : Infinity,
     async openCompletion(request, signal, { maxTokens = 16384, reasoningEffort } = {}) {
       if (provider.nativePreset === 'kilo-free' && (provider.baseUrl !== KILO_FREE_BASE_URL || model !== KILO_FREE_MODEL)) throw new Error('Kilo Free Router can only use the official gateway and kilo-auto/free. Reconfigure the provider in Settings.');
       const body = { ...request, model, stream: true, max_tokens: Math.min(maxTokens, tokenLimit) };
@@ -192,10 +262,13 @@ export function createChatProviderRouter({ provider, model, key, fetchImpl = fet
         for (const field of ['provider', 'models', 'fallbacks', 'route', 'providerOptions', 'parallel_tool_calls']) delete body[field];
       }
       if (isGroqProvider(provider)) {
-        body.max_tokens = Math.min(body.max_tokens, 4096);
+        body.max_tokens = Math.min(body.max_tokens, 2048);
         // GPT-OSS does not support parallel tool calls on Groq. Keep local file,
         // shell, browser, and question tools on the existing Codex executor.
-        if (model.startsWith('openai/gpt-oss-')) body.parallel_tool_calls = false;
+        if (model.startsWith('openai/gpt-oss-')) {
+          body.parallel_tool_calls = false;
+          if (reasoningEffort) body.reasoning_effort = ['none', 'minimal', 'low'].includes(reasoningEffort) ? 'low' : reasoningEffort === 'medium' ? 'medium' : 'high';
+        }
         for (const field of ['logprobs', 'top_logprobs', 'logit_bias']) delete body[field];
         body.messages = (body.messages || []).map(({ name, ...message }) => message);
       }
@@ -230,8 +303,42 @@ export function createChatProviderRouter({ provider, model, key, fetchImpl = fet
         }
         return result;
       };
-      let response = await invoke();
+      let quotaWaits = 0, quotaWaitMs = 0;
+      async function respectCooldown(response) {
+        while (isGroqProvider(provider) && response.status === 429 && quotaWaits < 2) {
+          const detail = await response.clone().json().catch(() => ({}));
+          const message = String(detail.error?.message || '');
+          const retryHeader = response.headers.get('retry-after');
+          const match = message.match(/try again in\s+([\d.]+)(ms|s)/i);
+          const seconds = retryHeader && /^\d+(?:\.\d+)?$/.test(retryHeader)
+            ? Number(retryHeader) : Number(match?.[1]) / (match?.[2]?.toLowerCase() === 'ms' ? 1000 : 1);
+          const milliseconds = Math.ceil(seconds * 1000) + 100;
+          if (!/tokens per minute|requests per minute|\bTPM\b|\bRPM\b/i.test(message) || !(seconds > 0 && seconds <= 60) || quotaWaitMs + milliseconds > 60200) break;
+          // Bound total cooldown time and attempts before any output. Daily
+          // exhaustion and longer waits remain explicit errors.
+          quotaWaits++; quotaWaitMs += milliseconds;
+          await response.body?.cancel();
+          await waitImpl(milliseconds, undefined, { signal });
+          response = await invoke();
+        }
+        return response;
+      }
+      let response = await respectCooldown(await invoke());
       let rejectedDetail;
+      if (isGroqProvider(provider) && response.status === 413) {
+        rejectedDetail = await response.json().catch(() => ({}));
+        const explanation = String(rejectedDetail.error?.message || '');
+        const budget = explanation.match(/tokens per minute[\s\S]*?Limit\s+(\d+),\s*Requested\s+(\d+)/i);
+        const available = budget ? Math.floor(Number(budget[1]) - Number(budget[2]) + body.max_tokens - 128) : 0;
+        if (available >= 256 && available < body.max_tokens) {
+          // Only reduce the requested output reserve. Never discard the user's
+          // instructions, tool results, or conversation to make a request fit.
+          tokenLimit = available;
+          body.max_tokens = available;
+          response = await respectCooldown(await invoke());
+          rejectedDetail = undefined;
+        }
+      }
       if ([400, 422].includes(response.status)) {
         rejectedDetail = await response.json().catch(() => ({}));
         const description = JSON.stringify(rejectedDetail);
@@ -241,7 +348,7 @@ export function createChatProviderRouter({ provider, model, key, fetchImpl = fet
         if (maximum >= 256 && maximum < body.max_tokens) {
           tokenLimit = maximum;
           body.max_tokens = maximum;
-          response = await invoke();
+          response = await respectCooldown(await invoke());
           rejectedDetail = undefined;
         }
       }
@@ -251,6 +358,7 @@ export function createChatProviderRouter({ provider, model, key, fetchImpl = fet
         const hint = [401, 403].includes(response.status) ? 'Check your API key and model access in Settings.'
           : provider.nativePreset === 'kilo-free' && [402, 429, 503].includes(response.status) ? 'Kilo Auto Free is limited or temporarily unavailable. Wait or select another free provider; Forge will not switch this preset to a paid route.'
           : response.status === 429 ? (isGroqProvider(provider) ? 'Groq’s request or token limit was reached. Try a shorter task or a new chat with less context, or wait for your quota to reset. Check your Groq account limits.' : 'The provider rate limit was reached. Wait before retrying.')
+            : response.status === 413 && isGroqProvider(provider) ? 'This conversation exceeds Groq’s token allowance. Start a shorter chat or choose a provider with a larger context allowance.'
             : [400, 422].includes(response.status) ? 'Choose a model that supports tool calling and this message type.'
               : response.status === 202 ? 'The provider queued this request instead of returning a live stream. Retry with a streaming model.' : '';
         throw Object.assign(new Error(`${provider.name} returned HTTP ${response.status}. ${hint}${explanation ? ' ' + explanation : ''}`.trim()), { status: response.status });
@@ -311,7 +419,10 @@ export async function* chatChunks(responseOrBody) {
 }
 
 export async function bridgeResponses({ input, res, router, signal }) {
-  const { request, toolMap, allowedToolNames } = toChatRequest(input);
+  const translated = toChatRequest(input);
+  const { toolMap, allowedToolNames } = translated;
+  const catalog = createToolCatalog(translated.request, { limit: router.toolLimit || CHAT_TOOL_LIMIT, maxSchemaChars: router.toolSchemaBudget || Infinity });
+  const request = catalog.request;
   let route, chunks, firstChunk;
   for (let attempt = 0; attempt < 3; attempt++) {
     const opened = await router.openCompletion(request, signal, { maxTokens: 16384, reasoningEffort: input.reasoning?.effort });
@@ -370,7 +481,8 @@ export async function bridgeResponses({ input, res, router, signal }) {
     async function* withFirst() { yield firstChunk; yield* chunks; }
     let currentChunks = withFirst();
     let currentRequest = request;
-    for (let recovery = 0; ; recovery += 1) {
+    let recovery = 0, discoveries = 0;
+    for (;;) {
       finishReason = null;
       calls.clear();
       let segmentText = '';
@@ -408,8 +520,32 @@ export async function bridgeResponses({ input, res, router, signal }) {
       if (pendingDisplayText.length >= 5 && toolMarkerPrefixLength(pendingDisplayText) === pendingDisplayText.length) {
         throw new Error(`${route.name} stopped in the middle of text-form tool-call markup. Forge did not execute it. Choose a model/provider that supports Chat Completions tool calling.`);
       }
-      if (finishReason !== 'length') break;
+      if (finishReason !== 'length') {
+        const discovered = [...calls.values()].find((call) => normalizeToolName(call.name) === catalog.discoveryName);
+        if (!discovered) break;
+        if (!['stop', 'tool_calls', 'function_call'].includes(finishReason)) throw new Error(`${route.name} stopped before completing tool discovery.`);
+        if (discoveries++ >= 4) throw new Error('The model searched for tools repeatedly without taking an action. Retry with a more specific task.');
+        // Discovery is local metadata only. Do not expose it to Codex or execute
+        // a mixed batch of real functions before the discovery result is read.
+        const advertised = new Set(currentRequest.tools.map((tool) => tool.function.name));
+        const batch = [...calls.values()].map((call) => {
+          const name = normalizeToolName(call.name);
+          if (!call.id || !advertised.has(name)) throw new Error('Tool discovery included an unknown or incomplete function call.');
+          JSON.parse(call.arguments || '{}');
+          return { id: call.id, type: 'function', function: { name, arguments: call.arguments || '{}' } };
+        });
+        const results = batch.map((call) => ({ role: 'tool', tool_call_id: call.id, content: call.id === discovered.id
+          ? JSON.stringify(catalog.search(JSON.parse(call.function.arguments)))
+          : 'This call was not executed because this batch included tool discovery. Read the discovery result and reissue the call if still needed.' }));
+        currentRequest = catalog.prepare([...currentRequest.messages, { role: 'assistant', content: segmentText || null, tool_calls: batch }, ...results]);
+        const opened = await router.openCompletion(currentRequest, signal, { maxTokens: 16384, route, reasoningEffort: input.reasoning?.effort });
+        route = opened.route;
+        if (!opened.response.body) throw new Error('The provider did not return a stream after tool discovery.');
+        currentChunks = chatChunks(opened.response);
+        continue;
+      }
       if (recovery >= 2) throw new Error(`${route.name} reached its output limit after two automatic recovery attempts. Partial text was retained; unfinished tool calls were not executed. Retry with a smaller task or a model with a larger output budget.`);
+      recovery += 1;
       const truncatedTools = calls.size > 0;
       const continuation = truncatedTools
         ? 'The previous inference reached its output limit while generating tool arguments. None of the tool calls from that truncated inference were executed. Regenerate the complete necessary tool call, using smaller file edits and shorter tool arguments. Do not repeat previous commentary. Use the original task and existing tool results as context.'
@@ -439,10 +575,11 @@ export async function bridgeResponses({ input, res, router, signal }) {
       // Some NIM GPT-OSS streams leak channel and JSON-format metadata into
       // the function name. Strip only known terminal metadata; the remaining
       // name must still exactly match an advertised tool below.
-      const name = call.name.replace(/<\|channel\|>(?:analysis|commentary|final|json)(?:json|<\|constrain\|>json)?$/, '');
+      const name = normalizeToolName(call.name);
       const tool = toolMap.get(name);
       if (!tool || !call.id) throw new Error(`The model returned an unknown or incomplete tool call (${String(call.name).slice(0, 64)}).`);
       if (allowedToolNames && !allowedToolNames.has(name)) throw new Error(`The model called ${name}, which this request did not allow.`);
+      if (!currentRequest.tools?.some((entry) => entry.function.name === name)) throw new Error(`The model called ${name}, which was not advertised in this inference. Search for that tool before calling it.`);
       const args = JSON.parse(call.arguments || '{}');
       if (tool.custom && typeof args.input !== 'string') throw new Error('A free-form tool call was missing its input.');
       const item = {

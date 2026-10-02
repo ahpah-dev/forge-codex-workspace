@@ -594,7 +594,7 @@ class CodexAppServer {
       this.emit({ type: 'connection', connected: false, message: 'Codex connection closed.' });
     });
     await this.requestRaw('initialize', {
-      clientInfo: { name: 'forge_coding_workspace', title: 'Forge', version: process.env.FORGE_APP_VERSION || '1.0.39' },
+      clientInfo: { name: 'forge_coding_workspace', title: 'Forge', version: process.env.FORGE_APP_VERSION || '1.0.40' },
       capabilities: { experimentalApi: true },
     });
     this.notify('initialized', {});
