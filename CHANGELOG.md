@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.35
+
+- Added a native computer-use connection diagnostic with helper health, real window inventory, displays, embedded browser pages, and recovery guidance.
+- Distinguish Forge desktop access from empty inventories in other Codex plugins. Models can open File Explorer or an embedded browser even when no app or tab is listed.
+- Share desktop recovery instructions across Codex, Claude, and external providers.
+- Report Windows enumeration failures instead of silently returning an empty list.
+
 ## 1.0.34
 
 - Add a smooth browser-panel exit with a temporary native-page snapshot, chat-layout expansion, and an immediate reduced-motion path.

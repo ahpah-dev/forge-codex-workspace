@@ -563,6 +563,22 @@ function parseDesktopKeyChord(value) {
 }
 
 async function executeDesktopComputerAction(action, params = {}) {
+  if (action === 'computer-connection') {
+    const displays = screen.getAllDisplays().map((display) => ({ displayId: String(display.id), primary: display.id === screen.getPrimaryDisplay().id }));
+    let desktop;
+    try {
+      const state = await sendComputerHost('state');
+      desktop = { connected: true, windowCount: (state.windows || []).length, ...state };
+    } catch (error) {
+      desktop = { connected: false, error: error.message };
+    }
+    const pages = [browserView?.webContents, ...[...browserPopups.values()].filter((popup) => !popup.isDestroyed()).map((popup) => popup.webContents)]
+      .filter((page) => page && !page.isDestroyed()).map((page) => ({ pageId: String(page.id), title: page.getTitle(), url: page.getURL() || 'about:blank' }));
+    const recovery = desktop.connected
+      ? 'Forge’s native desktop helper is connected. Empty windows do not disable desktop access: take computer_use_screenshot, or computer_use_open with the requested absolute folder path to open File Explorer, then inspect computer_use_state. Use browser_open with a URL to create/reveal an embedded browser page even if the page list is empty. Other plugins’ empty inventories do not describe this connection.'
+      : 'The native helper failed; its exact error is shown above. Retry computer_use_state once to restart the helper. If it still fails, restart Forge in the signed-in Windows desktop session and report the helper error. Forge browser_open is available independently of the native helper.';
+    return { desktop, displays, browser: { connected: true, scope: 'Forge embedded pages only; external Chrome/Edge are accessed through desktop tools', pages }, message: `${JSON.stringify({ desktop, displays, browser: { connected: true, pages } }, null, 2)}\n${recovery}` };
+  }
   if (action === 'computer-open') {
     const target = String(params.target || '').trim();
     if (isBrowserUrl(target)) await shell.openExternal(target);
@@ -587,7 +603,7 @@ async function executeDesktopComputerAction(action, params = {}) {
       height: Math.round(display.bounds.height * (Number(display.scaleFactor) || 1)),
       scaleFactor: Number(display.scaleFactor) || 1,
     }));
-    return { ...state, displays, message: `Foreground window: ${state.foregroundWindow || '(untitled)'}. Cursor: ${state.cursor.x}, ${state.cursor.y}. Displays: ${displays.map((display) => `${display.displayId}${display.primary ? ' (primary)' : ''} ${display.width}×${display.height}`).join('; ')}.\nOpen windows:\n${(state.windows || []).map((window) => `${window.handle}: ${window.title}${window.minimized ? ' (minimized)' : ''}`).join('\n')}` };
+    return { ...state, displays, message: `Forge native desktop connection is responding. Foreground window: ${state.foregroundWindow || '(untitled)'}. Cursor: ${state.cursor.x}, ${state.cursor.y}. Displays: ${displays.map((display) => `${display.displayId}${display.primary ? ' (primary)' : ''} ${display.width}×${display.height}`).join('; ')}.\nOpen windows:\n${(state.windows || []).map((window) => `${window.handle}: ${window.title}${window.minimized ? ' (minimized)' : ''}`).join('\n') || 'No titled windows were returned. Take computer_use_screenshot to inspect the desktop, or computer_use_open with the requested absolute folder/app path. This is not evidence that desktop access is unavailable.'}` };
   }
   if (action === 'computer-screenshot') {
     const capture = await captureDesktopDisplay(params.displayId);

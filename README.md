@@ -24,7 +24,7 @@ File edits appear in expandable code cards with line numbers and additions/remov
 
 Download the latest Windows x64 installer from [GitHub Releases](https://github.com/davidegeric-cloud/forge-codex-workspace/releases/latest). Run the installer, then launch Forge from the Start menu or desktop shortcut. Sign in to Codex once in the Codex app or Codex CLI; Forge uses that saved local account automatically.
 
-To build the installer yourself, use Node.js 18 or newer on Windows x64, run `npm install`, then `npm run dist:win`. The installer is written to `release/Forge-Setup-1.0.34-x64.exe`. The desktop app bundles its Codex runtime and does not need a global Node.js install.
+To build the installer yourself, use Node.js 18 or newer on Windows x64, run `npm install`, then `npm run dist:win`. The installer is written to `release/Forge-Setup-1.0.35-x64.exe`. The desktop app bundles its Codex runtime and does not need a global Node.js install.
 
 ## Start from source
 
@@ -54,6 +54,8 @@ Use **Manage providers** to add OpenRouter, NVIDIA NIM, or another service that 
 **Codex plugins:** Open **Plugins** to search the directory, manage installed plugins, and refresh marketplace sources. Choose **Setup** on an installed plugin to see its skills, MCP servers, and account connections. Vercel and other connected apps show their actual callable state; connect missing accounts or enable disabled connections from the panel, then refresh. Forge includes a plugin's connected app mentions when you use `@plugin`, and supports plugin forms and URL sign-in requests during tasks. These plugins work with Codex and its external API providers; Claude uses its separate runtime. Start a new session after installing or enabling a plugin. Capabilities that require the original Codex desktop host, including special verification flows, still need that host.
 
 **In-app browser:** The Windows desktop browser opens alongside chat, with a draggable panel edge, an expand button, and live action feedback. Returning to chat leaves its page and tools running. Computer-use actions use native clicks, typing, and incremental pointer/scroll input; screenshots match the viewport coordinates. Forge's browser configuration adds its MCP server without replacing your other configured servers.
+
+**Computer-use connection:** Forge desktop has its own Windows controller, separate from the Codex desktop plugin's connected-app inventory. Models can call `computer_use_connection` to inspect the native helper, Windows windows, displays, and Forge browser pages, including precise errors and recovery guidance. An empty app or tab list does not prevent opening a requested folder in File Explorer with `computer_use_open` or creating a browser page with `browser_open`. External Chrome/Edge windows use the desktop tools; `browser_tabs` lists Forge's embedded pages only. These recovery instructions apply to Codex, custom providers, and Claude. Native desktop input requires the Windows desktop app; the browser-only server supplies browser tools.
 
 ## Workspace and appearance
 

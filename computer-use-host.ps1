@@ -86,7 +86,7 @@ public static class ForgeDesktopInput
     private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
 
     private delegate bool WindowCallback(IntPtr window, IntPtr parameter);
-    [DllImport("user32.dll")]
+    [DllImport("user32.dll", SetLastError = true)]
     private static extern bool EnumWindows(WindowCallback callback, IntPtr parameter);
     [DllImport("user32.dll")]
     private static extern bool IsWindowVisible(IntPtr window);
@@ -108,7 +108,7 @@ public static class ForgeDesktopInput
     public static WindowInfo[] Windows()
     {
         var windows = new System.Collections.Generic.List<WindowInfo>();
-        EnumWindows(delegate(IntPtr window, IntPtr parameter) {
+        var enumerated = EnumWindows(delegate(IntPtr window, IntPtr parameter) {
             if (!IsWindowVisible(window)) return true;
             var text = new StringBuilder(512);
             GetWindowText(window, text, text.Capacity);
@@ -118,6 +118,7 @@ public static class ForgeDesktopInput
             windows.Add(new WindowInfo { handle = window.ToInt64().ToString(), title = text.ToString(), processId = unchecked((int)processId), minimized = IsIconic(window) });
             return true;
         }, IntPtr.Zero);
+        if (!enumerated) throw new InvalidOperationException("Windows window enumeration failed (error " + Marshal.GetLastWin32Error() + "). Restart Forge in the signed-in Windows desktop session.");
         return windows.ToArray();
     }
 
