@@ -40,9 +40,17 @@ export async function encryptProviderKey(key) {
   return (await runPowerShell(script, String(key))).trim();
 }
 
+const decryptedKeys = new Map();
 export async function decryptProviderKey(ciphertext) {
+  const encrypted = String(ciphertext), now = Date.now();
+  for (const [key, entry] of decryptedKeys) if (entry.expires <= now) decryptedKeys.delete(key);
+  if (decryptedKeys.has(encrypted)) return decryptedKeys.get(encrypted).promise;
   const script = dpapiPowerShellScript('Unprotect');
-  return await runPowerShell(script, String(ciphertext));
+  const entry = { expires: now + 300000, promise: runPowerShell(script, encrypted) };
+  decryptedKeys.set(encrypted, entry);
+  if (decryptedKeys.size > 32) decryptedKeys.delete(decryptedKeys.keys().next().value);
+  try { return await entry.promise; }
+  catch (error) { if (decryptedKeys.get(encrypted) === entry) decryptedKeys.delete(encrypted); throw error; }
 }
 
 function dpapiPowerShellScript(operation) {

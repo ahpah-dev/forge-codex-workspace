@@ -14,6 +14,7 @@ import { bridgeResponses, createChatProviderRouter, providerApiFormat, providerB
 import { browserCodexConfig, browserCodexArgs, computerUseInstructions } from './browser-config.mjs';
 import { createOmniRouteManager, isLocalOmniRoute, OMNIROUTE_BASE_URL } from './omniroute-manager.mjs';
 import { createOmniRouteRouting, omniRouteFallbacks } from './omniroute-routing.mjs';
+import { createOmniRouteSync } from './omniroute-sync.mjs';
 import './public/question-protocol.js';
 import './public/plugin-protocol.js';
 import './public/file-paths.js';
@@ -53,6 +54,7 @@ let initialAppState = null;
 let settingsRevision = 0;
 let threadOpenRevision = 0;
 const turnRequests = new Map();
+const startingRequests = new Map();
 const turnErrors = new Map();
 const fallbackJobs = new Map();
 const pendingComputerUse = new Map();
@@ -602,7 +604,7 @@ class CodexAppServer {
       this.emit({ type: 'connection', connected: false, message: 'Codex connection closed.' });
     });
     await this.requestRaw('initialize', {
-      clientInfo: { name: 'forge_coding_workspace', title: 'Forge', version: process.env.FORGE_APP_VERSION || '1.0.43' },
+      clientInfo: { name: 'forge_coding_workspace', title: 'Forge', version: process.env.FORGE_APP_VERSION || '1.0.44' },
       capabilities: { experimentalApi: true },
     });
     this.notify('initialized', {});
@@ -778,7 +780,15 @@ const omniRouting = createOmniRouteRouting({
   },
   onRoute(route) {
     const active = [...turnRequests.values()].filter(request => request.providerId === route.ownerProviderId);
-    publish({ type:'notification', method:'routing/model/selected', params:{ route, ...(active.length === 1 ? {threadId:active[0].threadId} : {}) } });
+    publish({ type:'notification', method:'routing/model/selected', params:{ route, ...(route.scopeId !== 'default' ? {threadId:route.scopeId} : active.length === 1 ? {threadId:active[0].threadId} : {}) } });
+  },
+});
+
+const omniSync = createOmniRouteSync({ manager: omniRoute, token: bridgeToken,
+  baseUrl: () => `http://${host}:${port}`,
+  getCandidates: async () => {
+    const keys = await readEncryptedProviderKeys(providerKeysPath);
+    return omniRouteFallbacks(settings.providers, id => Boolean(keys[id]), id => decryptProviderKey(keys[id]));
   },
 });
 
@@ -864,10 +874,10 @@ async function startCodexTask(input, cwd, { announceContinuation, signal } = {})
     sandboxPolicy: readOnly ? { type: 'readOnly', networkAccess: false } : unrestricted ? { type: 'dangerFullAccess' } : { type: 'workspaceWrite', writableRoots: [cwd], networkAccess: false },
   });
   const turnId = turn.turn?.id || null;
+  if (signal?.aborted && turnId) await codex.rpc('turn/interrupt', { threadId, turnId });
   if (announceContinuation) {
     const job = fallbackJobs.get(announceContinuation);
     if (job) job.newTurnId = turnId;
-    if (signal?.aborted && turnId) await codex.rpc('turn/interrupt', { threadId, turnId });
   }
   return { threadId, turnId, providerId, ...(announceContinuation ? { continuedFrom: announceContinuation } : {}) };
 }
@@ -1276,7 +1286,7 @@ async function handleApi(req, res, url) {
         settings.freeRouting = { enabled, codexFallback: enabled && input.codexFallback === true };
         await saveSettings();
         freeRouter.reset();
-        omniRouting.reset();
+        omniRouting.reset(); omniSync.reset();
         initialAppState = null;
         return json(res, 200, { freeRouting: freeRoutingStatus(keys), providers: publicProviders(keys) });
       }
@@ -1299,7 +1309,7 @@ async function handleApi(req, res, url) {
         const baseUrl = normalizeProviderBaseUrl(input.baseUrl || OMNIROUTE_BASE_URL);
         if (!isLocalOmniRoute({nativePreset:'omniroute',baseUrl})) throw new Error('Use a local OmniRoute address.');
         if (baseUrl === OMNIROUTE_BASE_URL && !(await omniRoute.status()).running) await omniRoute.start();
-        omniRouting.reset();
+        omniRouting.reset(); omniSync.reset();
         return json(res, 200, {url:new URL('/dashboard',baseUrl).href});
       }
       if (route === '/api/providers/discover') {
@@ -1360,7 +1370,7 @@ async function handleApi(req, res, url) {
           ? settings.providers.map((item) => item.id === id ? provider : item)
           : [...settings.providers, provider];
         await saveSettings();
-        omniRouting.reset();
+        omniRouting.reset(); omniSync.reset();
         return json(res, 200, { provider: { ...provider, authConfigured: true } });
       }
       if (route === '/api/providers/remove') {
@@ -1371,7 +1381,7 @@ async function handleApi(req, res, url) {
         await writeEncryptedProviderKeys(providerKeysPath, encryptedKeys);
         settings.providers = settings.providers.filter((provider) => provider.id !== id);
         await saveSettings();
-        omniRouting.reset();
+        omniRouting.reset(); omniSync.reset();
         return json(res, 200, { providers: publicProviders(encryptedKeys) });
       }
       if (route === '/api/login/start') {
@@ -1428,6 +1438,12 @@ async function handleApi(req, res, url) {
         return json(res, 200, { deleted: true, threadId });
       }
       if (route === '/api/messages') {
+        const requestId = String(input.requestId || '');
+        const controller = new AbortController();
+        if (requestId) startingRequests.set(requestId, controller);
+        const cancelStart = () => { if (!res.writableEnded) controller.abort(new Error('Task start cancelled.')); };
+        res.once('close', cancelStart);
+        try {
         if (!activeWorkspace) throw new Error('Open a workspace folder before starting a task.');
         const text = String(input.text || '').trim();
         const images = normalizeImageAttachments(input.images);
@@ -1458,16 +1474,19 @@ async function handleApi(req, res, url) {
           }
         }
         try {
-          const result = await startCodexTask(task, activeWorkspace);
+          const result = await startCodexTask(task, activeWorkspace, { signal: controller.signal });
           return json(res, 200, { ...result, continuedFrom });
         } catch (error) {
-          if (task.providerId !== 'openai' || !settings.freeRouting.enabled || !settings.freeRouting.codexFallback || !isCodexLimitError(error)) throw error;
+          if (controller.signal.aborted || task.providerId !== 'openai' || !settings.freeRouting.enabled || !settings.freeRouting.codexFallback || !isCodexLimitError(error)) throw error;
           const contextualText = input.threadId ? await continuationText(input.threadId, task) : text;
-          const result = await startCodexTask({ ...task, continuationContext: input.threadId ? contextualText : '', continuedFrom: input.threadId || null, providerId: FREE_PROVIDER_ID, providerModel: 'auto-free', threadId: '' }, activeWorkspace);
+          const result = await startCodexTask({ ...task, continuationContext: input.threadId ? contextualText : '', continuedFrom: input.threadId || null, providerId: FREE_PROVIDER_ID, providerModel: 'auto-free', threadId: '' }, activeWorkspace, { signal: controller.signal });
           return json(res, 200, { ...result, continuedFrom: input.threadId || null });
         }
+        } finally { if (requestId) startingRequests.delete(requestId); res.removeListener('close', cancelStart); }
       }
       if (route === '/api/interrupt') {
+        const starting = startingRequests.get(String(input.requestId || ''));
+        if (starting) { starting.abort(new Error('Task start cancelled.')); return json(res, 200, { ok: true }); }
         const threadId = String(input.threadId || '');
         const fallback = fallbackJobs.get(threadId);
         if (fallback) {
@@ -1558,6 +1577,27 @@ const httpServer = createServer(async (req, res) => {
       res.removeListener('close', cancel);
     }
   }
+  const upstream = url.pathname.match(/^\/internal\/omni-upstreams\/([a-f0-9]{16})\/v1\/(models|chat\/completions)$/);
+  if (upstream) {
+    if (req.headers.authorization !== `Bearer ${bridgeToken}` || req.headers.origin) return json(res, 403, { error: { message: 'Invalid local upstream session.' } });
+    if (!omniSync.has(upstream[1])) return json(res, 404, { error: { message: 'Free upstream no longer configured.' } });
+    if (upstream[2] === 'models' && req.method === 'GET') return json(res, 200, { object: 'list', data: [{ id: 'free', object: 'model', owned_by: 'forge' }] });
+    if (req.method !== 'POST' || upstream[2] !== 'chat/completions') return json(res, 405, { error: { message: 'Method not allowed.' } });
+    const controller = new AbortController(); res.once('close', () => controller.abort());
+    try {
+      const opened = await omniSync.open(upstream[1], await bodyJson(req), controller.signal);
+      res.writeHead(opened.response.status, { 'Content-Type': opened.response.headers.get('content-type') || 'text/event-stream', 'Cache-Control': 'no-cache' });
+      for await (const bytes of opened.response.body) {
+        if (controller.signal.aborted) break;
+        if (!res.write(bytes)) await new Promise(resolve => {
+          const done = () => { res.removeListener('drain', done); res.removeListener('close', done); resolve(); };
+          res.once('drain', done); res.once('close', done);
+        });
+      }
+      res.end();
+    } catch (error) { if (!res.headersSent) json(res, Number(error.status) || 502, { error: { message: 'Free upstream unavailable. OmniRoute can try another connected route.' } }); else res.end(); }
+    return;
+  }
   const providerBridge = url.pathname.match(/^\/internal\/providers\/([a-z0-9_-]+)\/responses$/);
   if (url.pathname === '/internal/free-route/responses' || providerBridge) {
     if (req.method !== 'POST') return json(res, 405, { error: { message: 'Method not allowed.' } });
@@ -1575,10 +1615,12 @@ const httpServer = createServer(async (req, res) => {
         const key = keys[provider.id] ? await decryptProviderKey(keys[provider.id]) : '';
         if (!key && !isLocalOmniRoute(provider)) throw new Error(`Add your ${provider.name} API key in Settings.`);
         const normalizedProvider = { ...provider, baseUrl:normalizeProviderBaseUrl(provider.baseUrl) };
-        router = isLocalOmniRoute(normalizedProvider) ? omniRouting.forProvider({provider:normalizedProvider,model:input.model,key,ensureGateway:async()=>{
+        const active = [...turnRequests.values()].filter(request => request.providerId === provider.id);
+        router = isLocalOmniRoute(normalizedProvider) ? omniRouting.forProvider({provider:normalizedProvider,model:input.model,key,scopeId:active.length===1?active[0].threadId:'default',ensureGateway:async()=>{
           if (normalizedProvider.baseUrl !== OMNIROUTE_BASE_URL) return;
           const status = await omniRoute.status();
           if (!status.running) await omniRoute.start();
+          if (/^auto(?:\/[\w-]+)?:free$/.test(input.model) || input.model==='auto/best-free') return await omniSync.configure();
         }}) : createChatProviderRouter({ provider: normalizedProvider, model: input.model, key });
       }
       await bridgeResponses({ input, res, router, signal: AbortSignal.any([controller.signal, AbortSignal.timeout(600000)]) });

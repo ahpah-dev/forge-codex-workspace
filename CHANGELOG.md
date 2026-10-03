@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.44
+
+- Show a routing notice only when a chat's actual destination changes; retry OmniRoute after cooldown instead of sticking indefinitely to a direct fallback.
+- Launch OmniRoute through its production server and configure a managed free coding pool from supported saved Forge integrations. OmniRoute handles upstream selection and failover; real provider keys remain in Forge's encrypted store.
+- Preserve third-party tool history and structured calls; handle repeated function names, object arguments, missing parallel-call indexes, split CRLF/UTF-8 streams, and valid final SSE frames. Bound malformed-inference repairs and network waits; never replay tools after partial output.
+- Batch runtime events, reuse unchanged message DOM, and cache secure credential reads to reduce streaming stalls. Keep draft input, sidebar, and settings usable while a task is running.
+- Make Stop cancel a task before its first output or turn ID arrives.
+- Verify live OmniRoute file creation/editing, gateway failover, native Codex tool execution, provider dialogs, and 1,200-event UI responsiveness.
+
 ## 1.0.43
 
 - Fix "The previous exec_command tool is unavailable in this request" when an existing conversation contains tools absent from the current runtime request.

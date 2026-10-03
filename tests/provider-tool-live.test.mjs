@@ -9,6 +9,7 @@ import { bridgeResponses, createChatProviderRouter, providerBaseInstructions } f
 import { decryptProviderKey, readEncryptedProviderKeys } from '../provider-secrets.mjs';
 import { createOmniRouteRouting, omniRouteFallbacks } from '../omniroute-routing.mjs';
 import { createOmniRouteManager, OMNIROUTE_BASE_URL } from '../omniroute-manager.mjs';
+import { createOmniRouteSync } from '../omniroute-sync.mjs';
 
 for (const {providerId,task} of [{providerId:'groq-free',task:'files'},{providerId:'groq-free',task:'chat'},{providerId:'kilo-free-router',task:'files'},{providerId:'omniroute-local',task:'files'}]) test(task==='chat' ? `${providerId} GPT-OSS 20B answers a normal native Codex request` : `${providerId} creates and edits real files with over 250 available tools`, { skip: process.env.FORGE_TOOL_LIVE !== '1', timeout: 360000 }, async () => {
   const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -36,8 +37,11 @@ for (const {providerId,task} of [{providerId:'groq-free',task:'files'},{provider
     }
     return response;
   };
-  const routing=omni?createOmniRouteRouting({fetchImpl,getFallbacks:async()=>omniRouteFallbacks(settings.providers,id=>Boolean(keys[id]),id=>decryptProviderKey(keys[id]),fetchImpl),onRoute:route=>console.log(JSON.stringify({provider:providerId,selectedProvider:route.providerName,selectedModel:route.model,fallback:route.fallback}))}):null;
-  const makeRouter=()=>omni?routing.forProvider({provider,model,key,ensureGateway:()=>localGateway.start()}):createChatProviderRouter({provider,model,key,fetchImpl});
+  const selectedRoutes=[]; let upstreamRequests=0;
+  const candidates=()=>omniRouteFallbacks(settings.providers,id=>Boolean(keys[id]),id=>decryptProviderKey(keys[id]),fetchImpl);
+  const sync=omni?createOmniRouteSync({manager:localGateway,getCandidates:candidates,baseUrl:()=>`http://127.0.0.1:${server.address().port}`,token:'fixture-local-session'}):null;
+  const routing=omni?createOmniRouteRouting({fetchImpl,getFallbacks:candidates,onRoute:route=>{selectedRoutes.push(route);console.log(JSON.stringify({provider:providerId,selectedProvider:route.providerName,selectedModel:route.model,fallback:route.fallback}));}}):null;
+  const makeRouter=()=>omni?routing.forProvider({provider,model,key,ensureGateway:async()=>{await localGateway.start();return sync.configure();}}):createChatProviderRouter({provider,model,key,fetchImpl});
   const area = path.join(root, 'data', 'provider-tool-checks');
   await mkdir(area, { recursive: true });
   const workspace = await mkdtemp(path.join(area, 'run-'));
@@ -48,6 +52,14 @@ for (const {providerId,task} of [{providerId:'groq-free',task:'files'},{provider
   let requests = 0;
   const server = createServer(async (req, res) => {
     try {
+      const upstream=req.url.match(/^\/internal\/omni-upstreams\/([a-f0-9]{16})\/v1\/(models|chat\/completions)$/);
+      if(upstream){
+        assert.equal(req.headers.authorization,'Bearer fixture-local-session');
+        if(upstream[2]==='models'){res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({object:'list',data:[{id:'free',object:'model'}]}));return;}
+        upstreamRequests++;let text='';for await(const bytes of req)text+=bytes;
+        const opened=await sync.open(upstream[1],JSON.parse(text),AbortSignal.timeout(180000));
+        res.writeHead(200,{'content-type':opened.response.headers.get('content-type')});for await(const bytes of opened.response.body)res.write(bytes);res.end();return;
+      }
       let body = ''; for await (const bytes of req) body += bytes;
       requests++;
       const input=JSON.parse(body);
@@ -86,6 +98,7 @@ for (const {providerId,task} of [{providerId:'groq-free',task:'files'},{provider
     return new Promise((resolve, reject) => { const id = nextId++; pending.set(id, { resolve, reject }); child.stdin.write(JSON.stringify({ id, method, params }) + '\n'); });
   }
   try {
+    if(omni){await localGateway.start();try {assert.equal(await sync.configure(),'forge-free');}catch(error){console.log(JSON.stringify({configurationError:error.message,details:error.details}));throw error;}}
     await rpc('initialize', { clientInfo: { name: 'forge_provider_tool_check', version: '1.0.41' }, capabilities: { experimentalApi: true } });
     child.stdin.write('{"method":"initialized","params":{}}\n');
     const config = { web_search: 'disabled', model_providers: { provider_check: { name: 'Provider check', base_url: `http://127.0.0.1:${server.address().port}`, wire_api: 'responses', requires_openai_auth: false, supports_websockets: false, request_max_retries: 0, stream_max_retries: 0 } } };
@@ -107,6 +120,7 @@ for (const {providerId,task} of [{providerId:'groq-free',task:'files'},{provider
     }
     assert.equal(await readFile(path.join(workspace, 'existing.txt'), 'utf8'), 'after\n');
     assert.equal(await readFile(path.join(workspace, 'created.txt'), 'utf8'), 'Provider saved this\n');
+    if(omni){assert.ok(upstreamRequests>0,'Gateway must call a managed upstream');assert.ok(selectedRoutes.length>0);assert.ok(selectedRoutes.every(route=>!route.fallback),'Must route through OmniRoute, not the direct rescue fallback');}
     assert.ok(events.some((event) => event.method === 'item/completed' && ['fileChange', 'commandExecution'].includes(event.params.item?.type)));
     console.log(JSON.stringify({ provider:providerId, model, requests, inferenceRequests, toolCounts, verified: ['existing.txt edited', 'created.txt created'], workspace }));
   } finally {

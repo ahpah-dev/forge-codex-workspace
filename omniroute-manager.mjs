@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
+import { randomBytes } from 'node:crypto';
 
 export const OMNIROUTE_VERSION = '3.8.51';
 export const OMNIROUTE_BASE_URL = 'http://127.0.0.1:20128/v1';
@@ -22,7 +23,8 @@ export function createOmniRouteManager({ appRoot, dataRoot, fetchImpl = fetch, s
   let server = null, installer = null, operation = null, starting = null, stopped = false;
   let phase = 'idle', error = '';
   let serverReady = false;
-  const env = () => ({ ...process.env, ELECTRON_RUN_AS_NODE: '1', NODE_ENV: 'production', DATA_DIR: profile, HOSTNAME: '127.0.0.1', HOST: '127.0.0.1', PORT: '20128', OMNIROUTE_NO_UPDATE_NOTIFIER: '1', OMNIROUTE_CLI_SKIP_REPO_ENV: '1', OMNIROUTE_AUTO_FREE_FALLBACK_TO_FULL_POOL: 'false' });
+  const serviceToken = randomBytes(32).toString('hex');
+  const env = () => ({ ...process.env, ELECTRON_RUN_AS_NODE: '1', NODE_ENV: 'production', DATA_DIR: profile, HOSTNAME: '127.0.0.1', HOST: '127.0.0.1', PORT: '20128', OMNIROUTE_INTERNAL_SERVICE_TOKEN: serviceToken, OMNIROUTE_NO_UPDATE_NOTIFIER: '1', OMNIROUTE_CLI_SKIP_REPO_ENV: '1', OMNIROUTE_AUTO_FREE_FALLBACK_TO_FULL_POOL: 'false' });
   async function status() {
     let running = false, requiresKey = false;
     try {
@@ -47,7 +49,10 @@ export function createOmniRouteManager({ appRoot, dataRoot, fetchImpl = fetch, s
     await mkdir(profile, { recursive: true });
     phase = 'starting'; error = '';
     serverReady = false;
-    const child = server = spawnImpl(process.execPath, [entry], { cwd: path.dirname(entry), env: env(), windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    // Use OmniRoute's production launcher: it stamps the real socket locality
+    // for authenticated internal management and installs its abort guards.
+    const productionEntry = path.join(path.dirname(entry), 'server-ws.mjs');
+    const child = server = spawnImpl(process.execPath, [existsSync(productionEntry) ? productionEntry : entry], { cwd: path.dirname(entry), env: env(), windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
     let startupTail = '';
     const capture = (bytes) => {
       startupTail = (startupTail + bytes.toString().replace(/\x1b\[[0-9;]*m/g, '')).slice(-2000);
@@ -93,5 +98,14 @@ export function createOmniRouteManager({ appRoot, dataRoot, fetchImpl = fetch, s
     })().catch((failure) => { phase = 'failed'; error = failure.message; }).finally(() => { operation = null; });
   }
   async function stop() { stopped = true; installer?.kill(); server?.kill(); installer = null; server = null; }
-  return { status, start, installAndStart, stop };
+  async function management(route, method = 'GET', body) {
+    if (!server || !serverReady) throw new Error('Forge can configure only the OmniRoute process it started.');
+    const response = await fetchImpl(`http://127.0.0.1:20128/api/${route}`, { method,
+      headers: { 'x-omniroute-internal-service-token': serviceToken, 'Content-Type': 'application/json' },
+      ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(20000) });
+    const result = await response.json();
+    if (!response.ok) throw Object.assign(new Error(`OmniRoute configuration failed at ${route.split('/')[0]} (HTTP ${response.status}).`), { status: response.status, details: result.error });
+    return result;
+  }
+  return { status, start, installAndStart, stop, management };
 }

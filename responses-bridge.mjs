@@ -285,7 +285,7 @@ export function createChatProviderRouter({ provider, model, key, fetchImpl = fet
   let tokenLimit = 32768;
   let toolRepairs = 0, repairPending = false;
   const repairHint = { role: 'system', content: 'The provider rejected the previous inference before any tool executed because the function call format was invalid. Regenerate one short structured call to a currently listed function. Use its exact name without channel metadata and valid JSON arguments, with correctly escaped strings. Do not print raw tool markup. No failed call was executed.' };
-  const repairable = (error) => isGroqProvider(provider) && toolRepairs < 1 && (/tool_use_failed|tool_call_validation/i.test(String(error?.code || '')) || /Failed to parse tool call arguments|tool call validation failed/i.test(String(error?.message || '')));
+  const repairable = (error) => toolRepairs < 1 && (/tool_use_failed|tool_call_validation/i.test(String(error?.code || '')) || /Failed to parse tool call arguments|tool call validation failed/i.test(String(error?.message || '')));
   return {
     // Free Groq accounts have a small combined prompt/output token allowance.
     // A smaller active catalog leaves room for the task and full instructions.
@@ -333,7 +333,7 @@ export function createChatProviderRouter({ provider, model, key, fetchImpl = fet
       }
       const sendRequest = () => fetchImpl(`${provider.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
         method: 'POST', headers: { ...(key ? { Authorization: `Bearer ${key}` } : {}), 'Content-Type': 'application/json', Accept: 'text/event-stream' },
-        body: JSON.stringify(body), signal,
+        body: JSON.stringify(body), signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(180000)]) : AbortSignal.timeout(180000),
       });
       const invoke = async () => {
         let result = await sendRequest();
@@ -367,7 +367,7 @@ export function createChatProviderRouter({ provider, model, key, fetchImpl = fet
         return response;
       }
       let response = await respectCooldown(await invoke());
-      if (isGroqProvider(provider) && response.status === 400) {
+      if (response.status === 400) {
         const detail = await response.clone().json().catch(() => ({}));
         if (repairable(detail.error)) {
           toolRepairs++;
@@ -429,7 +429,7 @@ export function createChatProviderRouter({ provider, model, key, fetchImpl = fet
 function normalizeChatChoice(choice, legacyCallId, inferFinishReason = false) {
   const delta = choice.delta || choice.message || {};
   const rawCalls = Array.isArray(delta.tool_calls) ? delta.tool_calls : delta.function_call ? [{ id: legacyCallId, function: delta.function_call }] : [];
-  const tool_calls = rawCalls.map((call, index) => ({ ...call, index: Number.isInteger(call.index) ? call.index : index }));
+  const tool_calls = rawCalls.map((call, index) => ({ ...call, index: Number.isInteger(call.index) ? call.index : index, implicitIndex: !Number.isInteger(call.index) }));
   return {
     ...choice,
     delta: { ...delta, ...(tool_calls.length ? { tool_calls } : {}) },
@@ -460,7 +460,11 @@ export async function* chatChunks(responseOrBody) {
   const decoder = new TextDecoder();
   let buffer = '';
   for await (const bytes of body) {
-    buffer += decoder.decode(bytes, { stream: true }).replace(/\r\n/g, '\n');
+    buffer += decoder.decode(bytes, { stream: true });
+    // Normalize the assembled buffer, not each network chunk: CR and LF may
+    // arrive separately. Preserve a trailing CR until its LF arrives.
+    buffer = buffer.replace(/\r\n/g, '\n');
+    if (buffer.length > 16 * 1024 * 1024) throw new Error('The provider stream frame exceeded the supported size.');
     let boundary;
     while ((boundary = buffer.indexOf('\n\n')) >= 0) {
       const block = buffer.slice(0, boundary); buffer = buffer.slice(boundary + 2);
@@ -472,7 +476,14 @@ export async function* chatChunks(responseOrBody) {
       yield { ...payload, choices: payload.choices.map((choice) => normalizeChatChoice(choice, legacyCallId)) };
     }
   }
-  if (buffer.trim()) throw new Error('The provider returned an incomplete stream.');
+  buffer += decoder.decode();
+  if (buffer.trim()) {
+    const data = buffer.replace(/\r\n/g, '\n').split('\n').filter(line=>line.startsWith('data:')).map(line=>line.slice(5).trim()).join('\n');
+    if (data === '[DONE]') return;
+    if (!data) throw new Error('The provider returned an incomplete stream.');
+    const payload = JSON.parse(data);
+    yield { ...payload, ...(payload.choices ? { choices:payload.choices.map(choice=>normalizeChatChoice(choice,legacyCallId)) } : {}) };
+  }
 }
 
 export async function bridgeResponses({ input, res, router, signal }) {
@@ -481,7 +492,8 @@ export async function bridgeResponses({ input, res, router, signal }) {
   const catalog = createToolCatalog(translated.request, { limit: router.toolLimit || CHAT_TOOL_LIMIT, maxSchemaChars: router.toolSchemaBudget || Infinity });
   const request = catalog.request;
   let route, chunks, firstChunk;
-  for (let attempt = 0; attempt < 3; attempt++) {
+  const attempts = router.preStreamAttempts || 3;
+  for (let attempt = 0; attempt < attempts; attempt++) {
     const opened = await router.openCompletion(request, signal, { maxTokens: 16384, reasoningEffort: input.reasoning?.effort });
     route = opened.route;
     if (!opened.response.body) throw new Error('The routed provider did not return a response stream.');
@@ -494,13 +506,14 @@ export async function bridgeResponses({ input, res, router, signal }) {
         const choice = next.value.choices?.[0];
         if (choice?.delta?.content || choice?.delta?.tool_calls?.length || choice?.finish_reason) { firstChunk = next.value; break; }
       }
+      if (firstChunk.model) route = { ...route, model: firstChunk.model, name: firstChunk.model };
       router.confirmRoute?.(route);
       break;
     } catch (error) {
       await chunks.return();
       if (signal?.aborted) throw error;
       router.rejectRoute(route, error);
-      if (attempt === 2) throw error;
+      if (attempt === attempts - 1) throw error;
     }
   }
   const id = 'resp_' + randomUUID().replaceAll('-', '');
@@ -567,11 +580,20 @@ export async function bridgeResponses({ input, res, router, signal }) {
           }
         }
         for (const call of delta.tool_calls || []) {
-          let pending = calls.get(call.index);
-          if (!pending) { pending = { id: call.id, name: '', arguments: '' }; calls.set(call.index, pending); }
+          let index = call.index;
+          const identified = call.id && [...calls.entries()].find(([,item])=>item.id===call.id);
+          if (identified) index = identified[0];
+          else if (call.implicitIndex && call.id && calls.has(index) && calls.get(index).id !== call.id) index = call.id;
+          else if (call.implicitIndex && !call.id && calls.size > 1) throw new Error('The provider omitted the index and ID of a parallel tool delta. No tools were executed.');
+          let pending = calls.get(index);
+          if (!pending) { pending = { id: call.id, name: '', arguments: '' }; calls.set(index, pending); }
+          if (call.id && pending.id && pending.id !== call.id) throw new Error('The provider changed a tool call ID during streaming. No tools were executed.');
           if (call.id) pending.id = call.id;
-          if (call.function?.name) pending.name += call.function.name;
-          if (call.function?.arguments) pending.arguments += call.function.arguments;
+          if (call.function?.name) {
+            const repeatedCompleteName = call.function.name === pending.name && currentRequest.tools?.some(tool=>tool.function.name===normalizeToolName(pending.name));
+            if (!repeatedCompleteName) pending.name += call.function.name;
+          }
+          if (call.function?.arguments) pending.arguments += typeof call.function.arguments === 'string' ? call.function.arguments : JSON.stringify(call.function.arguments);
         }
       }
       for (const key of ['prompt_tokens', 'completion_tokens', 'total_tokens']) usage[key] = (usage[key] || 0) + Number(segmentUsage[key] || 0);

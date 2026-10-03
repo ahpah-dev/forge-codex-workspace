@@ -154,13 +154,16 @@ function createModelIcon(modelId, providerId = '') {
   return svg;
 }
 
+let startingTurn = null;
 async function api(route, options = {}) {
   const headers = { 'X-Forge-Session': token, ...(options.headers || {}) };
   if (options.body !== undefined) headers['Content-Type'] = 'application/json';
   let response;
   try {
-    response = await fetch(route, { ...options, headers, body: options.body === undefined ? undefined : JSON.stringify(options.body) });
-  } catch {
+    response = await fetch(route, { ...options, signal: options.signal || AbortSignal.timeout(120000), headers, body: options.body === undefined ? undefined : JSON.stringify(options.body) });
+  } catch (error) {
+    if (options.signal?.aborted) throw new Error('Task start cancelled.');
+    if (error.name === 'TimeoutError') throw new Error('Forge took too long to respond. Stop or retry the task.');
     throw new Error('Could not reach Forge. If its terminal window was closed, start the app again.');
   }
   let result;
@@ -1389,7 +1392,9 @@ async function deleteThread(thread) {
   }
 }
 
+let applyingRuntimeEvents = false, runtimeSurfaceDirty = false;
 function renderSurface() {
+  if (applyingRuntimeEvents) { runtimeSurfaceDirty = true; return; }
   const active = Boolean(state.threadId || state.messages.length || state.isBusy);
   const wasConversation = !$('#conversation-view').hidden;
   $('.workspace-surface').classList.toggle('has-conversation', active);
@@ -2263,7 +2268,8 @@ function renderActivity(message) {
   const details = document.createElement('details');
   details.className = `activity-card activity-type-${message.activityType || 'task'} ${stateClass}`;
   if (message.activityType === 'files') details.classList.add('activity-files-card');
-  if (pending) details.open = true;
+  details.open = typeof message.expanded === 'boolean' ? message.expanded : pending;
+  details.addEventListener('toggle', () => { message.expanded = details.open; });
   const summary = document.createElement('summary');
   summary.className = 'activity-summary';
   const leading = document.createElement('span');
@@ -2318,8 +2324,18 @@ function renderActivity(message) {
   if (message.output) {
     const output = document.createElement('pre');
     output.className = 'activity-output';
-    output.textContent = message.output;
+    output.textContent = message.output.length > 48000 ? message.output.slice(-48000) : message.output;
     details.append(output);
+    if (message.output.length > 48000) {
+      const save = document.createElement('button'); save.type = 'button'; save.className = 'quiet-button';
+      save.textContent = 'Showing latest output · Save full log';
+      save.addEventListener('click', () => {
+        const url = URL.createObjectURL(new Blob([message.output], { type: 'text/plain;charset=utf-8' }));
+        const link = document.createElement('a'); link.href = url; link.download = 'Forge-command-output.txt'; link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      });
+      details.append(save);
+    }
   }
   if (message.activityType === 'files' && message.changes?.length) {
     const list = document.createElement('div');
@@ -2855,6 +2871,14 @@ function completedActivityStatus(item) {
   return outcome ? outcome + ' · ' + action : action;
 }
 
+const messageNodes = new WeakMap();
+function cachedMessage(message) {
+  if ((message.role === 'activity' && message.activityType !== 'command') || message.pending) return renderMessage(message);
+  const signature = [message.text, message.turnId, message.images, message.status, message.output, message.command, message.exitCode, message.expanded, message.completionFinished, message.completionDurationMs, state.isBusy, state.threadLoading, state.workspace?.path];
+  const cached = messageNodes.get(message);
+  if (cached && signature.every((value, index) => value === cached.signature[index])) return cached.node;
+  const node = renderMessage(message); messageNodes.set(message, { signature, node }); return node;
+}
 function renderMessages(forceTop = false) {
   const list = $('#message-list');
   const scroll = $('#conversation-scroll');
@@ -2869,7 +2893,7 @@ function renderMessages(forceTop = false) {
   }
   renderAgentOrganizer();
   const firstVisibleMessage = Math.max(0, state.messages.length - state.historyVisibleCount);
-  const visibleMessages = state.messages.slice(firstVisibleMessage).map(renderMessage);
+  const visibleMessages = state.messages.slice(firstVisibleMessage).map(cachedMessage);
   if (state.isBusy || state.pendingSend) visibleMessages.push(renderLiveProgress());
   if (firstVisibleMessage > 0) {
     const earlier = document.createElement('button');
@@ -3080,15 +3104,17 @@ function handleCodexEvent(event) {
     if (params.route.ownerProviderId) {
       if (params.threadId !== state.threadId || params.route.ownerProviderId !== state.threadProviderId) return;
       const label=`${params.route.fallback ? 'OmniRoute fallback · ' : ''}${params.route.providerName} · ${params.route.name}`;
-      const previous=state.messages.at(-1);
-      if(previous?.role!=='routing' || previous.text!==label)state.messages.push({role:'routing',text:label});
+      const previous=state.messages.findLast(message=>message.role==='routing' && message.ownerProviderId===params.route.ownerProviderId);
+      if(previous?.text===label)return;
+      state.messages.push({role:'routing',text:label,ownerProviderId:params.route.ownerProviderId});
       setActivityStatus(`Using ${params.route.name}`);renderSurface();return;
     }
     state.freeRouting.lastRoute = params.route;
     if (state.threadProviderId === 'forge-free') {
       const label = `${params.route.provider === 'nvidia' ? 'NVIDIA NIM' : 'OpenRouter free'} · ${params.route.name}`;
-      const previous = state.messages.at(-1);
-      if (previous?.role !== 'routing' || previous.text !== label) state.messages.push({ role: 'routing', text: label });
+      const previous = state.messages.findLast(message=>message.role==='routing' && message.ownerProviderId==='forge-free');
+      if (previous?.text === label) return;
+      state.messages.push({ role: 'routing', text: label, ownerProviderId: 'forge-free' });
       setActivityStatus(`Using ${params.route.name}`);
       renderAccount();
       renderSurface();
@@ -3823,7 +3849,9 @@ async function sendMessage(textOverride, { readOnlyOverride, routingText, replac
   state.threadName ||= (assignment ? `Delegate ${assignment.name}` : (text || 'Review attached image')).replace(/\s+/g, ' ').slice(0, 64);
   renderSurface();
   try {
-    const result = await api('/api/messages', { method: 'POST', body: {
+    const start = startingTurn = { requestId: crypto.randomUUID(), controller: new AbortController() };
+    const result = await api('/api/messages', { method: 'POST', signal: AbortSignal.any([start.controller.signal, AbortSignal.timeout(120000)]), body: {
+      requestId: start.requestId,
       threadId: state.threadId,
       text,
       pluginMentions,
@@ -3839,6 +3867,7 @@ async function sendMessage(textOverride, { readOnlyOverride, routingText, replac
       readOnly: $('#access-select').value === 'plan' || (readOnlyOverride ?? ($('#access-select').value === 'read')),
       planningMode: $('#access-select').value === 'plan',
     } });
+    if (start.controller.signal.aborted) throw new Error('Task start cancelled.');
     state.threadId = result.threadId;
     userMessage.threadId = result.threadId;
     state.threadProviderId = result.providerId || 'openai';
@@ -3861,10 +3890,17 @@ async function sendMessage(textOverride, { readOnlyOverride, routingText, replac
     renderSurface();
     showToast(error.message, 'error');
     return false;
-  }
+  } finally { startingTurn = null; }
 }
 
 async function interruptTurn() {
+  if (startingTurn) {
+    const start = startingTurn;
+    try { await api('/api/interrupt', { method: 'POST', body: { requestId: start.requestId } }); }
+    catch (error) { showToast(error.message, 'error'); }
+    finally { start.controller.abort(); }
+    if (!state.activeTurnId) return;
+  }
   if (state.fallbackSourceThreadId && !state.activeTurnId) {
     try { await api('/api/interrupt', { method: 'POST', body: { threadId: state.fallbackSourceThreadId } }); }
     catch (error) { showToast(error.message, 'error'); }
@@ -3881,9 +3917,9 @@ function updateComposerState() {
   const selectedModel = state.models.find((model) => model.id === state.modelId);
   const canUseSelectedProvider = Boolean(selectedModel?.providerId || state.account?.connected);
   $('#send-button').disabled = !state.workspace || !canUseSelectedProvider || state.isBusy || state.threadLoading;
-  $('#attach-image').disabled = !state.workspace || state.isBusy || state.threadLoading;
+  $('#attach-image').disabled = !state.workspace || state.threadLoading;
   $('#stop-turn').hidden = !state.isBusy;
-  $('#prompt-input').disabled = state.isBusy || state.threadLoading;
+  $('#prompt-input').disabled = state.threadLoading;
   $('#plan-build').disabled = state.isBusy || state.threadLoading;
 }
 
@@ -4428,10 +4464,31 @@ async function startLogin() {
   }
 }
 
+const runtimeEvents = [];
+let runtimeDrainScheduled = false;
+function queueRuntimeEvent(event) {
+  runtimeEvents.push(event);
+  if (runtimeDrainScheduled) return;
+  runtimeDrainScheduled = true;
+  setTimeout(drainRuntimeEvents, 32);
+}
+function drainRuntimeEvents() {
+  runtimeDrainScheduled = false;
+  const deadline = performance.now() + 8;
+  applyingRuntimeEvents = true;
+  try {
+    let count = 0;
+    while (runtimeEvents.length && count++ < 80 && performance.now() < deadline) {
+      try { handleCodexEvent(runtimeEvents.shift()); } catch (error) { console.error('Forge event update failed', error.name); }
+    }
+  } finally { applyingRuntimeEvents = false; }
+  if (runtimeSurfaceDirty) { runtimeSurfaceDirty = false; renderSurface(); }
+  if (runtimeEvents.length) { runtimeDrainScheduled = true; setTimeout(drainRuntimeEvents, 32); }
+}
 function connectEvents() {
   const source = new EventSource(`/api/events?token=${encodeURIComponent(token)}`);
   source.onmessage = (message) => {
-    try { handleCodexEvent(JSON.parse(message.data)); } catch { /* Ignore malformed event frames. */ }
+    try { queueRuntimeEvent(JSON.parse(message.data)); } catch { /* Ignore malformed event frames. */ }
   };
   source.onerror = () => {
     $('#connection-dot').className = 'connection-dot disconnected';
