@@ -62,7 +62,11 @@ const state = {
   preferredAccess: localStorage.getItem('forge.access') || 'write',
 };
 
-const liveActivities = createLiveActivityTracker();
+let liveActivities = createLiveActivityTracker();
+const sessions = ForgeSessions.createStore();
+state.sessionKey = crypto.randomUUID();
+state.draftText = '';
+let backgroundSessionUpdate = false;
 
 const escapeHTML = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 
@@ -961,6 +965,7 @@ function buildModelCatalog(codexModels, providers, anthropicStatus) {
 }
 
 function renderModels() {
+  if (backgroundSessionUpdate) return;
   const select = $('#model-select');
   if (state.modelId === 'gpt-6-sol') state.modelId = 'gpt-6.1-sol';
   const gpt6Models = state.models.filter((model) => (!model.providerId || model.providerId === 'openai') && /^gpt-6(?:\.1)?-/.test(model.id));
@@ -1282,6 +1287,8 @@ function updateEffortFromSlider() {
 }
 
 function renderThreads() {
+  if (backgroundSessionUpdate) return;
+  if (applyingRuntimeEvents) { runtimeSurfaceDirty = true; return; }
   const list = $('#session-list');
   list.replaceChildren();
   if (!state.workspace) {
@@ -1291,7 +1298,15 @@ function renderThreads() {
     list.append(empty);
     return;
   }
-  if (!state.threads?.length) {
+  const available = new Map((state.threads || []).map(thread=>[thread.id,thread]));
+  for (const record of sessions.records.values()) {
+    const view = record.key === state.sessionKey ? captureThreadView() : record.view;
+    if (!view.threadId && !record.running && !view.messages.length) continue;
+    if (!record.running && view.workspace?.path !== state.workspace?.path) continue;
+    const id = view.threadId || record.key;
+    available.set(id, { ...available.get(id), id, name: view.threadName || 'Starting task', modelProvider: view.threadProviderId, updatedAt: available.get(id)?.updatedAt || Date.now()/1000 });
+  }
+  if (!available.size) {
     const empty = document.createElement('div');
     empty.className = 'sidebar-empty';
     empty.textContent = 'No sessions found';
@@ -1299,7 +1314,7 @@ function renderThreads() {
     return;
   }
   const query = $('#session-filter')?.value.trim().toLocaleLowerCase() || '';
-  const threads = state.threads.filter((thread) => !query || (thread.name || '').toLocaleLowerCase().includes(query));
+  const threads = [...available.values()].filter((thread) => !query || (thread.name || '').toLocaleLowerCase().includes(query));
   if (!threads.length) {
     const empty = document.createElement('div');
     empty.className = 'sidebar-empty';
@@ -1312,13 +1327,17 @@ function renderThreads() {
     row.className = 'session-row';
     const button = document.createElement('button');
     button.type = 'button';
-    const isLoading = state.threadLoading && thread.id === state.threadId;
+    const session = sessions.find(thread.id);
+    const selected = thread.id === state.threadId || session?.key === state.sessionKey;
+    const running = session?.key === state.sessionKey ? state.isBusy : session?.running || thread.running;
+    const waiting = session?.waiting.size;
+    const isLoading = state.threadLoading && selected;
     const isDeleting = state.deletingThreads.has(thread.id);
-    button.className = `session-button ${thread.id === state.threadId ? 'active' : ''} ${isLoading ? 'loading' : ''}`;
+    button.className = `session-button ${selected ? 'active' : ''} ${isLoading ? 'loading' : ''} ${running ? 'running' : ''}`;
     button.disabled = isDeleting;
     button.dataset.threadId = thread.id;
     button.setAttribute('aria-busy', String(isLoading));
-    button.setAttribute('aria-current', thread.id === state.threadId ? 'page' : 'false');
+    button.setAttribute('aria-current', selected ? 'page' : 'false');
     let pointerActivated = false;
     button.addEventListener('pointerdown', (event) => {
       if (event.button !== 0) return;
@@ -1331,20 +1350,21 @@ function renderThreads() {
     });
     const glyph = document.createElement('span');
     glyph.className = 'session-glyph';
-    glyph.textContent = isLoading ? '' : '◌';
+    glyph.textContent = isLoading || running ? '' : '◌';
     const copy = document.createElement('span');
     copy.className = 'session-copy';
     const title = document.createElement('strong');
     title.textContent = thread.name || 'Untitled task';
     const updated = document.createElement('small');
-    updated.textContent = formatRelativeTime(thread.updatedAt);
+    updated.textContent = waiting ? 'Needs your attention' : running ? 'Running in background' : formatRelativeTime(thread.updatedAt);
+    if (running && selected) updated.textContent = waiting ? 'Needs your attention' : 'Running';
     copy.append(title, updated);
     button.append(glyph, copy);
     row.append(button);
     const remove = document.createElement('button');
     remove.type = 'button';
     remove.className = 'session-delete-button';
-    const currentSessionUnavailable = thread.id === state.threadId && (state.isBusy || state.threadLoading);
+    const currentSessionUnavailable = Boolean(running || (selected && state.threadLoading));
     remove.disabled = isDeleting || currentSessionUnavailable;
     remove.setAttribute('aria-label', `Delete session: ${thread.name || 'Untitled task'}`);
     remove.title = currentSessionUnavailable ? 'Wait for this session to finish opening or stop its task before deleting' : 'Delete session';
@@ -1357,10 +1377,12 @@ function renderThreads() {
 
 async function deleteThread(thread) {
   if (state.deletingThreads.has(thread.id)) return;
-  if (state.threadId === thread.id && (state.isBusy || state.threadLoading)) {
+  if (sessions.find(thread.id)?.running || (state.threadId === thread.id && (state.isBusy || state.threadLoading))) {
     showToast(state.threadLoading ? 'Wait for this session to finish opening before deleting it.' : 'Stop the active task before deleting its session.');
     return;
   }
+  const local=sessions.find(thread.id);
+  if (local && !local.view.threadId) { if(local.key===state.sessionKey)newTask();sessions.remove(thread.id);renderThreads();return; }
   const name = thread.name || 'Untitled session';
   if (!window.confirm(`Delete “${name}”? This permanently removes the session from Codex.`)) return;
   state.deletingThreads.add(thread.id);
@@ -1369,6 +1391,7 @@ async function deleteThread(thread) {
     await api('/api/threads/delete', { method: 'POST', body: { threadId: thread.id } });
     state.threads = (state.threads || []).filter((item) => item.id !== thread.id);
     state.threadHistoryCache.delete(thread.id);
+    sessions.remove(thread.id);
     if (state.threadId === thread.id) {
       state.threadId = null;
       state.threadProviderId = null;
@@ -1394,6 +1417,7 @@ async function deleteThread(thread) {
 
 let applyingRuntimeEvents = false, runtimeSurfaceDirty = false;
 function renderSurface() {
+  if (backgroundSessionUpdate) return;
   if (applyingRuntimeEvents) { runtimeSurfaceDirty = true; return; }
   const active = Boolean(state.threadId || state.messages.length || state.isBusy);
   const wasConversation = !$('#conversation-view').hidden;
@@ -1442,11 +1466,16 @@ function cancelMessageEdit() {
 }
 
 async function openBranchBeforeMessage(message) {
+  const origin=state.sessionKey;
+  saveCurrentSession();
   const sourceThreadId = message.threadId || state.threadId;
   if (!sourceThreadId || !message.turnId) throw new Error('This message cannot be used as a branch point.');
   const result = await api('/api/threads/fork-before-message', { method: 'POST', body: { threadId: sourceThreadId, turnId: message.turnId } });
   const history = await api('/api/threads/open', { method: 'POST', body: { threadId: result.threadId } });
+  if(state.sessionKey!==origin)throw new Error('Session changed while preparing the edited message. Reopen its chat to retry.');
+  resetSessionView();
   applyThreadResult(history);
+  sessions.save(captureThreadView());
   void refreshState({ quiet: true });
 }
 
@@ -1558,6 +1587,7 @@ function renderGitOrWorkspace() {
 }
 
 function renderAll() {
+  if (backgroundSessionUpdate) return;
   renderAccount();
   renderWorkspace();
   renderModels();
@@ -1579,7 +1609,7 @@ async function refreshState({ quiet = false } = {}) {
     state.anthropic = snapshot.anthropic || { available: false, connected: false };
     state.models = buildModelCatalog(snapshot.models || [], state.providers, state.anthropic);
     state.limits = snapshot.limits;
-    state.workspace = snapshot.workspace;
+    state.workspace ||= snapshot.workspace;
     state.recentWorkspaces = snapshot.recentWorkspaces || [];
     state.threads = snapshot.threads || [];
     state.git = snapshot.git || { branch: null, changedFiles: 0, entries: [] };
@@ -1594,13 +1624,12 @@ async function refreshState({ quiet = false } = {}) {
 }
 
 async function openWorkspace(pathValue) {
-  if (state.isBusy) {
-    showToast('Stop the active task before switching workspaces.');
-    return;
-  }
+  saveCurrentSession();
+  ++state.threadOpenVersion;
   try {
     const result = await api('/api/workspaces/open', { method: 'POST', body: { path: pathValue } });
     state.workspace = result.workspace;
+    resetSessionView();
     state.threadId = null;
     state.threadProviderId = null;
     state.threadName = '';
@@ -1636,10 +1665,9 @@ function newTask() {
     openWorkspaceDialog();
     return;
   }
-  if (state.isBusy) {
-    showToast('Stop the active task before starting a new one.');
-    return;
-  }
+  saveCurrentSession();
+  ++state.threadOpenVersion;
+  resetSessionView();
   state.threadId = null;
   state.threadProviderId = null;
   state.threadName = '';
@@ -1791,6 +1819,7 @@ function diffMarkup(diff) {
 }
 
 function renderContext() {
+  if (backgroundSessionUpdate) return;
   if (state.changePreview && state.changePreview.workspacePath !== state.workspace?.path) {
     state.changePreview = null;
     state.changePreviewVersion += 1;
@@ -2880,6 +2909,7 @@ function cachedMessage(message) {
   const node = renderMessage(message); messageNodes.set(message, { signature, node }); return node;
 }
 function renderMessages(forceTop = false) {
+  if (typeof backgroundSessionUpdate !== 'undefined' && backgroundSessionUpdate) return;
   const list = $('#message-list');
   const scroll = $('#conversation-scroll');
   const wasNearBottom = !forceTop && scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 180;
@@ -3325,13 +3355,16 @@ function handleCodexEvent(event) {
       }
     }
     renderSurface();
-    state.treeCache.clear();
-    if (state.workspace) void loadTree('');
-    refreshState({ quiet: true });
+    if (!backgroundSessionUpdate) {
+      state.treeCache.clear();
+      if (state.workspace) void loadTree('');
+      refreshState({ quiet: true });
+    }
   }
 }
 
 function renderApprovalSlot() {
+  if (typeof backgroundSessionUpdate !== 'undefined' && backgroundSessionUpdate) return;
   const pendingIds = new Set(state.approvals.map((request) => String(request.id)));
   for (const id of state.questionDrafts.keys()) if (!pendingIds.has(id)) state.questionDrafts.delete(id);
   const signature = JSON.stringify(state.approvals.map((request) => [request.id, request.method, request.params, state.questionSending.has(String(request.id))]));
@@ -3615,6 +3648,8 @@ async function answerApproval(id, decision) {
   const isQuestion = ForgeQuestions.isRequest(event.method);
   let pluginButtonStates = [];
   if (state.questionSending.has(String(id))) return;
+  const owner = typeof sessions === 'undefined' ? null : sessions.save(captureThreadView());
+  const update = action => owner ? inSession(owner,action) : action();
   try {
     let body = { id, decision };
     if (event.method === 'mcpServer/elicitation/request' && decision === 'accept' && event.params.mode !== 'url') {
@@ -3638,13 +3673,14 @@ async function answerApproval(id, decision) {
       pluginButtonStates.forEach(([button]) => { button.disabled = true; });
     }
     await api('/api/approval', { method: 'POST', body });
-    state.approvals = state.approvals.filter((request) => String(request.id) !== String(id));
-    if (isQuestion) setActivityStatus(liveActivities.current() || 'Continuing with your answer');
+    update(()=>{
+      state.approvals = state.approvals.filter((request) => String(request.id) !== String(id));
+      if (isQuestion) setActivityStatus(liveActivities.current() || 'Continuing with your answer');
+    });
   } catch (error) { showToast(error.message, 'error'); }
   finally {
-    state.questionSending.delete(String(id));
+    update(()=>{state.questionSending.delete(String(id));renderMessages();});
     pluginButtonStates.forEach(([button, disabled]) => { button.disabled = disabled; });
-    renderMessages();
   }
 }
 
@@ -3654,8 +3690,9 @@ function cacheThreadHistory(threadId, result) {
   while (state.threadHistoryCache.size > 12) state.threadHistoryCache.delete(state.threadHistoryCache.keys().next().value);
 }
 
+const SESSION_FIELDS = ['sessionKey','threadId','threadProviderId','threadName','messages','historyVisibleCount','workspace','approvals','activeTurnId','isBusy','pendingSend','selectedFile','activeContextTab','diff','turnStartedAt','activityStatus','fallbackSourceThreadId','questionDrafts','questionSending','pendingImages','composerPluginMentions','messageEditTarget','codePreviewViews','changePreview','modelId','effort','draftText','preferredAccess'];
 function captureThreadView() {
-  return {
+  return { ...Object.fromEntries(SESSION_FIELDS.map(field=>[field,state[field]])), startingTurn, liveActivities,
     threadId: state.threadId,
     threadProviderId: state.threadProviderId,
     threadName: state.threadName,
@@ -3670,6 +3707,54 @@ function captureThreadView() {
     activeContextTab: state.activeContextTab,
     diff: state.diff,
   };
+}
+
+function saveCurrentSession() {
+  state.draftText = $('#prompt-input').value;
+  if (state.threadId || state.isBusy || state.messages.length || state.draftText) return sessions.save(captureThreadView());
+  return null;
+}
+function restoreSessionView(view) {
+  for (const field of SESSION_FIELDS) state[field] = view[field];
+  startingTurn = view.startingTurn || null;
+  liveActivities = view.liveActivities || createLiveActivityTracker();
+  state.approvalRenderSignature = '';
+}
+function resetSessionView() {
+  state.sessionKey = crypto.randomUUID(); state.draftText = '';
+  state.threadLoading = false; state.threadLoadOrigin = null;
+  state.isBusy = false; state.pendingSend = false; state.turnStartedAt = null;
+  state.fallbackSourceThreadId = null; state.activityStatus = 'Starting task';
+  state.questionDrafts = new Map(); state.questionSending = new Set(); state.codePreviewViews = new Map();
+  state.pendingImages = []; state.composerPluginMentions = []; state.changePreview = null;
+  state.approvalRenderSignature = ''; startingTurn = null; liveActivities = createLiveActivityTracker();
+  setPendingImages([]);
+}
+function inSession(record, action) {
+  if (record.key === state.sessionKey) { const result=action(); sessions.save(captureThreadView()); return result; }
+  const foreground=captureThreadView(), previous=backgroundSessionUpdate;
+  restoreSessionView(record.view); backgroundSessionUpdate=true;
+  try { return action(); }
+  finally { sessions.save(captureThreadView()); restoreSessionView(foreground); backgroundSessionUpdate=previous; renderThreads(); }
+}
+function dispatchSessionEvent(event) {
+  const params=event.params || {};
+  if (event.method==='session/thread/assigned') {
+    const record=[...sessions.records.values()].find(record=>record.view.startingTurn?.requestId===params.requestId);
+    if (record) inSession(record,()=>{state.threadId=params.threadId;state.threadProviderId=params.providerId;record.threadIds.add(params.threadId);renderSurface();});
+    return;
+  }
+  const owner=event.method==='serverRequest/resolved'?[...sessions.records.values()].find(record=>record.waiting.has(String(params.requestId))):null;
+  const threadId=params.threadId || params.thread?.id || owner?.view.threadId;
+  if (threadId) {
+    const record=sessions.find(threadId);
+    if (record && record.key!==state.sessionKey) { sessions.append(record,event); renderThreads(); return; }
+    // Thread creation is associated with its initiating request by the server.
+    // Never attach another session's early events to an unassigned draft.
+    if (!record && threadId!==state.threadId) return;
+  }
+  handleCodexEvent(event);
+  if (state.threadId || state.isBusy) sessions.save(captureThreadView());
 }
 
 function applyThreadResult(result, { keepScroll = false } = {}) {
@@ -3695,10 +3780,10 @@ function applyThreadResult(result, { keepScroll = false } = {}) {
   state.messages = (result.messages || []).filter((message) => message.role !== 'agent-event').map((message) => ({ ...message, threadId: result.thread.id }));
   state.historyVisibleCount = 60;
   for (const event of (result.messages || []).filter((message) => message.role === 'agent-event')) upsertAgentItem(event.item, event.turnId);
-  state.approvals = [];
-  state.activeTurnId = null;
-  state.turnStartedAt = null;
-  state.isBusy = false;
+  state.approvals = result.approvals || [];
+  state.activeTurnId = result.activeTurn?.turnId || null;
+  state.turnStartedAt = result.activeTurn?.startedAt || (result.activeTurn ? Date.now() : null);
+  state.isBusy = Boolean(result.activeTurn);
   state.pendingSend = false;
   state.diff = '';
   state.threadLoading = false;
@@ -3715,13 +3800,32 @@ function applyThreadResult(result, { keepScroll = false } = {}) {
 }
 
 async function openThread(threadId) {
-  if (state.isBusy) { showToast('Stop the active task before switching sessions.'); return; }
   if (threadId === state.threadId && !state.threadLoading) return;
+  saveCurrentSession();
   const version = ++state.threadOpenVersion;
+  const live=sessions.find(threadId);
+  if (live) {
+    restoreSessionView(live.view);
+    const previous=backgroundSessionUpdate; backgroundSessionUpdate=true;
+    try { for (const event of live.events.splice(0)) handleCodexEvent(event); }
+    finally { backgroundSessionUpdate=previous; }
+    sessions.save(captureThreadView());
+    $('#prompt-input').value=state.draftText || ''; setPendingImages(state.pendingImages || []); resizeComposer();
+    $('#access-select').value=state.mode==='chat'?'read':state.preferredAccess;syncAskModeButton();
+    renderAll();
+    if (!state.threadId) return;
+    const id=state.threadId;
+    try { await api('/api/threads/open',{method:'POST',body:{threadId:id}}); }
+    catch(error){if(state.threadOpenVersion===version)showToast(error.message,'error');}
+    if(state.threadOpenVersion===version && state.threadId===id){state.treeCache.clear();if(state.workspace)void loadTree('');}
+    return;
+  }
   const cached = state.threadHistoryCache.get(threadId);
   const origin = state.threadLoading && state.threadLoadOrigin ? state.threadLoadOrigin : captureThreadView();
+  resetSessionView();
   state.threadLoadOrigin = origin;
   state.threadId = threadId;
+  state.sessionKey = crypto.randomUUID();
   state.threadProviderId = state.threads?.find((thread) => thread.id === threadId)?.modelProvider || null;
   state.threadName = state.threads?.find((thread) => thread.id === threadId)?.name || 'Opening session';
   state.threadLoading = true;
@@ -3730,6 +3834,7 @@ async function openThread(threadId) {
   state.historyVisibleCount = 60;
   state.approvals = [];
   state.activeTurnId = null;
+  state.isBusy = false;
   state.pendingSend = false;
   state.diff = '';
   renderAll();
@@ -3746,9 +3851,12 @@ async function openThread(threadId) {
     cacheThreadHistory(threadId, result);
     if (state.threadOpenVersion !== version || state.threadId !== threadId) return;
     applyThreadResult(result);
+    sessions.save(captureThreadView());
+    $('#prompt-input').value='';
   } catch (error) {
     if (state.threadOpenVersion !== version || state.threadId !== threadId) return;
     const previous = state.threadLoadOrigin;
+    restoreSessionView(previous);
     state.threadId = previous.threadId;
     state.threadProviderId = previous.threadProviderId;
     state.threadName = previous.threadName;
@@ -3848,10 +3956,13 @@ async function sendMessage(textOverride, { readOnlyOverride, routingText, replac
   const assignment = parseAgentAssignment(text);
   state.threadName ||= (assignment ? `Delegate ${assignment.name}` : (text || 'Review attached image')).replace(/\s+/g, ' ').slice(0, 64);
   renderSurface();
+  const start = startingTurn = { requestId: crypto.randomUUID(), controller: new AbortController() };
+  state.draftText = '';
+  const owner = sessions.save(captureThreadView());
   try {
-    const start = startingTurn = { requestId: crypto.randomUUID(), controller: new AbortController() };
     const result = await api('/api/messages', { method: 'POST', signal: AbortSignal.any([start.controller.signal, AbortSignal.timeout(120000)]), body: {
       requestId: start.requestId,
+      workspacePath: state.workspace.path,
       threadId: state.threadId,
       text,
       pluginMentions,
@@ -3868,6 +3979,7 @@ async function sendMessage(textOverride, { readOnlyOverride, routingText, replac
       planningMode: $('#access-select').value === 'plan',
     } });
     if (start.controller.signal.aborted) throw new Error('Task start cancelled.');
+    inSession(owner, () => {
     state.threadId = result.threadId;
     userMessage.threadId = result.threadId;
     state.threadProviderId = result.providerId || 'openai';
@@ -3875,12 +3987,15 @@ async function sendMessage(textOverride, { readOnlyOverride, routingText, replac
       selectFreeRouteModel();
       if (selectedModel.providerId !== 'forge-free') state.messages.push({ role: 'routing', text: 'Codex limit reached. This task is continuing with Free Auto Route.' });
     }
-    state.activeTurnId = result.turnId;
+    state.activeTurnId = state.isBusy ? result.turnId : null;
+    state.pendingSend = false;
     for (const message of state.messages) if (message.role === 'assistant' && !message.turnId) message.turnId = result.turnId;
     renderSurface();
-    $('#prompt-input').focus();
+    });
+    if (owner.key===state.sessionKey) $('#prompt-input').focus();
     return true;
   } catch (error) {
+    inSession(owner, () => {
     state.isBusy = false;
     state.pendingSend = false;
     state.activeTurnId = null;
@@ -3888,27 +4003,29 @@ async function sendMessage(textOverride, { readOnlyOverride, routingText, replac
     state.messages = state.messages.filter((message) => message.role !== 'assistant' || message.turnId || message.text);
     state.messages.push({ role: 'error', text: error.message });
     renderSurface();
-    showToast(error.message, 'error');
+    });
+    if (owner.key===state.sessionKey) showToast(error.message, 'error');
     return false;
-  } finally { startingTurn = null; }
+  } finally { inSession(owner,()=>{if(startingTurn===start)startingTurn=null;}); }
 }
 
 async function interruptTurn() {
-  if (startingTurn) {
-    const start = startingTurn;
+  const owner = captureThreadView();
+  if (owner.startingTurn) {
+    const start = owner.startingTurn;
     try { await api('/api/interrupt', { method: 'POST', body: { requestId: start.requestId } }); }
     catch (error) { showToast(error.message, 'error'); }
     finally { start.controller.abort(); }
-    if (!state.activeTurnId) return;
+    if (!owner.activeTurnId) return;
   }
-  if (state.fallbackSourceThreadId && !state.activeTurnId) {
-    try { await api('/api/interrupt', { method: 'POST', body: { threadId: state.fallbackSourceThreadId } }); }
+  if (owner.fallbackSourceThreadId && !owner.activeTurnId) {
+    try { await api('/api/interrupt', { method: 'POST', body: { threadId: owner.fallbackSourceThreadId } }); }
     catch (error) { showToast(error.message, 'error'); }
     return;
   }
-  if (!state.threadId || !state.activeTurnId) { showToast('The current task is still starting.'); return; }
+  if (!owner.threadId || !owner.activeTurnId) { showToast('The current task is still starting.'); return; }
   try {
-    await api('/api/interrupt', { method: 'POST', body: { threadId: state.threadId, turnId: state.activeTurnId } });
+    await api('/api/interrupt', { method: 'POST', body: { threadId: owner.threadId, turnId: owner.activeTurnId } });
     showToast('Stop requested.');
   } catch (error) { showToast(error.message, 'error'); }
 }
@@ -4479,7 +4596,7 @@ function drainRuntimeEvents() {
   try {
     let count = 0;
     while (runtimeEvents.length && count++ < 80 && performance.now() < deadline) {
-      try { handleCodexEvent(runtimeEvents.shift()); } catch (error) { console.error('Forge event update failed', error.name); }
+      try { dispatchSessionEvent(runtimeEvents.shift()); } catch (error) { console.error('Forge event update failed', error.name); }
     }
   } finally { applyingRuntimeEvents = false; }
   if (runtimeSurfaceDirty) { runtimeSurfaceDirty = false; renderSurface(); }

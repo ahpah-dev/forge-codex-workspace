@@ -370,6 +370,7 @@ export function createAnthropicProvider({ dataRoot, publish, executable = 'claud
         resolve(result);
       };
       const pending = { resolve: finish, threadId: session.id, input, questions, suggestions: options.suggestions || [], toolUseID: options.toolUseID || input?.tool_use_id };
+      pending.event={ type:'server-request', id, method:isQuestion?'anthropic/tool/requestUserInput':'anthropic/tool/requestApproval', params:details };
       pendingApprovals.set(id, pending);
       const onAbort = () => {
         if (!pendingApprovals.delete(id)) return;
@@ -600,7 +601,7 @@ export function createAnthropicProvider({ dataRoot, publish, executable = 'claud
     }
   }
 
-  async function startTurn({ threadId, text, images = [], model, cwd, readOnly = false, planningMode = false, askBeforeExternalActions = true }) {
+  async function startTurn({ threadId, text, images = [], model, cwd, requestId, readOnly = false, planningMode = false, askBeforeExternalActions = true }) {
     if (planningMode) {
       readOnly = true;
       text = `Planning mode: inspect the project and produce an actionable implementation plan with steps, affected files, tradeoffs, and validation. Ask clarifying questions when needed. Do not edit files or implement the plan.\n\n${text}`;
@@ -641,6 +642,7 @@ export function createAnthropicProvider({ dataRoot, publish, executable = 'claud
     if (firstTurn) await saveSessions();
 
     activeTurns.set(session.id, { controller: new AbortController(), turnId });
+    send('session/thread/assigned', { requestId, threadId:session.id, providerId:'anthropic' });
     send('thread/started', { thread: { id: session.id, name: session.name, cwd: session.cwd, modelProvider: 'anthropic' } });
     const controller = activeTurns.get(session.id).controller;
     queueMicrotask(() => {
@@ -662,5 +664,9 @@ export function createAnthropicProvider({ dataRoot, publish, executable = 'claud
     }
   }
 
-  return { getStatus, listThreads, readThreadHistory, forkBeforeMessage, deleteThread, startTurn, interrupt, resolveApproval, resolveQuestion, owns };
+  return { getStatus, listThreads, readThreadHistory, forkBeforeMessage, deleteThread, startTurn, interrupt, resolveApproval, resolveQuestion, owns,
+    activeSession:threadId=>activeTurns.get(threadId),
+    activeSessions:()=>[...activeTurns.keys()].map(id=>getSession(id)).filter(Boolean),
+    pendingRequests:threadId=>[...pendingApprovals.values()].filter(request=>request.threadId===threadId).map(request=>request.event).filter(Boolean),
+  };
 }

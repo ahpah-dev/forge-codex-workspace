@@ -604,7 +604,7 @@ class CodexAppServer {
       this.emit({ type: 'connection', connected: false, message: 'Codex connection closed.' });
     });
     await this.requestRaw('initialize', {
-      clientInfo: { name: 'forge_coding_workspace', title: 'Forge', version: process.env.FORGE_APP_VERSION || '1.0.44' },
+      clientInfo: { name: 'forge_coding_workspace', title: 'Forge', version: process.env.FORGE_APP_VERSION || '1.0.45' },
       capabilities: { experimentalApi: true },
     });
     this.notify('initialized', {});
@@ -738,6 +738,7 @@ function publish(event) {
 }
 
 codex.subscribe((event) => {
+  if (event.method==='turn/started') { const request=turnRequests.get(event.params?.threadId);if(request)request.turnId=event.params.turn?.id; }
   if (event.type === 'notification' && /^(item\/(started|delta|completed|fileChange\/patchUpdated)|turn\/(started|completed|failed|interrupted))$/.test(event.method || '')) {
     invalidateThreadHistory(event.params?.threadId);
   }
@@ -770,7 +771,6 @@ const freeRouter = createFreeRouter({
     const keys = await readEncryptedProviderKeys(providerKeysPath);
     return keys[FREE_KEY_IDS[provider]] ? decryptProviderKey(keys[FREE_KEY_IDS[provider]]) : '';
   },
-  onRoute(route) { publish({ type: 'notification', method: 'routing/model/selected', params: { route } }); },
 });
 
 const omniRouting = createOmniRouteRouting({
@@ -861,7 +861,8 @@ async function startCodexTask(input, cwd, { announceContinuation, signal } = {})
     publish({ type: 'notification', method: 'routing/fallback/started', params: { threadId: announceContinuation, newThreadId: threadId, providerId } });
   }
   const effort = String(input.effort || 'medium');
-  turnRequests.set(threadId, { ...input, providerId, cwd, threadId });
+  publish({ type:'notification', method:'session/thread/assigned', params:{ requestId:input.requestId, threadId, providerId } });
+  turnRequests.set(threadId, { ...input, providerId, cwd, threadId, startedAt:Date.now() });
   turnErrors.delete(threadId);
   const turn = await codex.rpc('turn/start', {
     threadId, cwd, input: [
@@ -874,6 +875,8 @@ async function startCodexTask(input, cwd, { announceContinuation, signal } = {})
     sandboxPolicy: readOnly ? { type: 'readOnly', networkAccess: false } : unrestricted ? { type: 'dangerFullAccess' } : { type: 'workspaceWrite', writableRoots: [cwd], networkAccess: false },
   });
   const turnId = turn.turn?.id || null;
+  const active = turnRequests.get(threadId);
+  if (active) active.turnId = turnId;
   if (signal?.aborted && turnId) await codex.rpc('turn/interrupt', { threadId, turnId });
   if (announceContinuation) {
     const job = fallbackJobs.get(announceContinuation);
@@ -958,6 +961,8 @@ async function getAppState() {
     if (threadsResult.status === 'fulfilled') threads = threadsResult.value.data || [];
   }
   if (activeWorkspace) threads.push(...await anthropic.listThreads(activeWorkspace));
+  for(const request of turnRequests.values())threads.push({id:request.threadId,name:String(request.text || 'Running task').slice(0,68),updatedAt:request.startedAt/1000,modelProvider:request.providerId});
+  threads.push(...anthropic.activeSessions());
   const git = await readGitSummary();
   const visibleThreads = [];
   const seenThreadIds = new Set();
@@ -978,7 +983,7 @@ async function getAppState() {
     limits,
     workspace: activeWorkspace ? { path: activeWorkspace, name: path.basename(activeWorkspace) || activeWorkspace } : null,
     recentWorkspaces: settings.recentWorkspaces,
-    threads: visibleThreads.map((thread) => ({ id: thread.id, name: thread.name || thread.preview || 'Untitled session', updatedAt: thread.updatedAt, status: thread.status?.type || thread.status || null, modelProvider: thread.modelProvider || 'openai' })),
+    threads: visibleThreads.map((thread) => ({ id: thread.id, name: thread.name || thread.preview || 'Untitled session', updatedAt: thread.updatedAt, status: thread.status?.type || thread.status || null, running:turnRequests.has(thread.id) || Boolean(anthropic.activeSession(thread.id)), modelProvider: thread.modelProvider || 'openai' })),
     git,
   };
 }
@@ -1118,7 +1123,9 @@ async function openThread(threadId) {
   let workspace = activeWorkspace ? { path: activeWorkspace, name: path.basename(activeWorkspace) || activeWorkspace } : null;
   const pathFromThread = history.thread.cwd;
   if (pathFromThread && revision === threadOpenRevision) workspace = await setWorkspace(pathFromThread);
-  return { ...history, workspace };
+  const active=anthropic.owns(threadId)?anthropic.activeSession(threadId):turnRequests.get(threadId);
+  const approvals=anthropic.owns(threadId)?anthropic.pendingRequests(threadId):[...codex.serverRequests.entries()].filter(([,request])=>request.params?.threadId===threadId).map(([id,request])=>({type:'server-request',id,...request}));
+  return { ...history, workspace, activeTurn:active ? {turnId:active.turnId,startedAt:active.startedAt || null} : null, approvals };
 }
 
 async function handleApi(req, res, url) {
@@ -1424,6 +1431,7 @@ async function handleApi(req, res, url) {
         if (!activeWorkspace) throw new Error('Open a workspace before deleting a session.');
         const threadId = String(input.threadId || '').trim();
         if (!threadId || threadId.length > 200) throw new Error('Choose a valid session to delete.');
+        if (turnRequests.has(threadId)) throw new Error('Stop this session before deleting it.');
         if (anthropic.owns(threadId)) {
           await anthropic.deleteThread(threadId);
           return json(res, 200, { deleted: true, threadId });
@@ -1444,7 +1452,8 @@ async function handleApi(req, res, url) {
         const cancelStart = () => { if (!res.writableEnded) controller.abort(new Error('Task start cancelled.')); };
         res.once('close', cancelStart);
         try {
-        if (!activeWorkspace) throw new Error('Open a workspace folder before starting a task.');
+        const taskWorkspace=input.workspacePath ? await realpath(path.resolve(String(input.workspacePath))) : activeWorkspace;
+        if (!taskWorkspace || !(await stat(taskWorkspace)).isDirectory()) throw new Error('Open a workspace folder before starting a task.');
         const text = String(input.text || '').trim();
         const images = normalizeImageAttachments(input.images);
         if (!text && !images.length) throw new Error('Write a prompt or attach an image before sending.');
@@ -1456,7 +1465,8 @@ async function handleApi(req, res, url) {
             text,
             images,
             model: String(input.providerModel || ''),
-            cwd: activeWorkspace,
+            cwd: taskWorkspace,
+            requestId,
             readOnly: Boolean(input.readOnly),
             planningMode: Boolean(input.planningMode),
             askBeforeExternalActions: settings.askExternalApprovals,
@@ -1474,12 +1484,12 @@ async function handleApi(req, res, url) {
           }
         }
         try {
-          const result = await startCodexTask(task, activeWorkspace, { signal: controller.signal });
+          const result = await startCodexTask(task, taskWorkspace, { signal: controller.signal });
           return json(res, 200, { ...result, continuedFrom });
         } catch (error) {
           if (controller.signal.aborted || task.providerId !== 'openai' || !settings.freeRouting.enabled || !settings.freeRouting.codexFallback || !isCodexLimitError(error)) throw error;
           const contextualText = input.threadId ? await continuationText(input.threadId, task) : text;
-          const result = await startCodexTask({ ...task, continuationContext: input.threadId ? contextualText : '', continuedFrom: input.threadId || null, providerId: FREE_PROVIDER_ID, providerModel: 'auto-free', threadId: '' }, activeWorkspace, { signal: controller.signal });
+          const result = await startCodexTask({ ...task, continuationContext: input.threadId ? contextualText : '', continuedFrom: input.threadId || null, providerId: FREE_PROVIDER_ID, providerModel: 'auto-free', threadId: '' }, taskWorkspace, { signal: controller.signal });
           return json(res, 200, { ...result, continuedFrom: input.threadId || null });
         }
         } finally { if (requestId) startingRequests.delete(requestId); res.removeListener('close', cancelStart); }
@@ -1606,7 +1616,8 @@ const httpServer = createServer(async (req, res) => {
     res.on('close', () => controller.abort());
     try {
       const input = await bodyJson(req);
-      let router = freeRouter;
+      const requestThreadId=String(req.headers['thread-id'] || input.prompt_cache_key || '');
+      let router = { ...freeRouter, confirmRoute(route) { publish({type:'notification',method:'routing/model/selected',params:{threadId:requestThreadId,route}}); } };
       if (providerBridge) {
         const provider = settings.providers.find((item) => item.id === providerBridge[1]);
         if (!provider || providerApiFormat(provider) !== 'chat') throw new Error('This Chat Completions provider is no longer configured.');
@@ -1616,7 +1627,7 @@ const httpServer = createServer(async (req, res) => {
         if (!key && !isLocalOmniRoute(provider)) throw new Error(`Add your ${provider.name} API key in Settings.`);
         const normalizedProvider = { ...provider, baseUrl:normalizeProviderBaseUrl(provider.baseUrl) };
         const active = [...turnRequests.values()].filter(request => request.providerId === provider.id);
-        router = isLocalOmniRoute(normalizedProvider) ? omniRouting.forProvider({provider:normalizedProvider,model:input.model,key,scopeId:active.length===1?active[0].threadId:'default',ensureGateway:async()=>{
+        router = isLocalOmniRoute(normalizedProvider) ? omniRouting.forProvider({provider:normalizedProvider,model:input.model,key,scopeId:requestThreadId || (active.length===1?active[0].threadId:'default'),ensureGateway:async()=>{
           if (normalizedProvider.baseUrl !== OMNIROUTE_BASE_URL) return;
           const status = await omniRoute.status();
           if (!status.running) await omniRoute.start();

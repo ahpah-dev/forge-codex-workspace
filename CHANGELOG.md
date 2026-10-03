@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.45
+
+- Run multiple sessions at the same time. New task and session switching keep background tasks running.
+- Isolate each chat's streamed output, drafts, images, questions, approvals, activity tracker, model, effort, and work mode.
+- Show running and attention states in the sidebar; Stop and deletion controls target the chosen session.
+- Associate new threads with their originating request, including out-of-order startup responses and Claude sessions.
+- Pin task execution to its selected workspace and route third-party notifications by the Codex thread header.
+- Preserve live runtime status and pending approvals when reopening sessions.
+
 ## 1.0.44
 
 - Show a routing notice only when a chat's actual destination changes; retry OmniRoute after cooldown instead of sticking indefinitely to a direct fallback.

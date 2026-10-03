@@ -105,6 +105,9 @@ button { -webkit-tap-highlight-color: transparent; }
 .session-delete-button svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
 .session-glyph { display: grid; place-items: center; width: 18px; height: 18px; flex: 0 0 auto; color: var(--accent); font-size: calc(18px * var(--ui-scale)); }
 .session-button.loading .session-glyph { width: 13px; height: 13px; margin: 2px; border: 1.5px solid var(--line); border-top-color: color-mix(in srgb, var(--accent) 35%, var(--line)); border-radius: 50%; animation: thread-spin .75s linear infinite; }
+.session-button.running .session-glyph { width: 13px; height: 13px; margin: 2px; border: 1.5px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: thread-spin 1s linear infinite; }
+.session-button.running .session-copy small { color: var(--accent); }
+@media (prefers-reduced-motion: reduce) { .session-button.running .session-glyph { animation: none; } }
 .session-copy { display: flex; flex: 1; flex-direction: column; min-width: 0; gap: 3px; }
 .session-copy strong { overflow: hidden; font-size: calc(12px * var(--ui-scale)); font-weight: 560; text-overflow: ellipsis; white-space: nowrap; }
 .session-copy small { color: var(--soft); font-size: calc(10px * var(--ui-scale)); }
