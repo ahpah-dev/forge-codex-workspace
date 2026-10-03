@@ -16,7 +16,7 @@ export function browserMcpConfig(appRoot, dataRoot, cwd) {
         FORGE_IN_APP_BROWSER: '1',
         FORGE_BROWSER_API_URL: process.env.FORGE_BROWSER_API_URL,
         FORGE_BROWSER_API_TOKEN: process.env.FORGE_BROWSER_API_TOKEN,
-        FORGE_APP_VERSION: process.env.FORGE_APP_VERSION || '1.0.42',
+        FORGE_APP_VERSION: process.env.FORGE_APP_VERSION || '1.0.43',
       },
     };
   }

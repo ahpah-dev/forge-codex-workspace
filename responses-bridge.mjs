@@ -74,15 +74,34 @@ export function toChatRequest(input) {
   if (tools.length) messages.push({ role: 'system', content: 'Use only the structured function-calling interface and the tools listed in this request. Never print tool-call markup such as <tool_call> or raw function names such as functions.* in assistant text. If a needed tool is unavailable, explain that plainly instead of inventing a tool call.' });
   if (shell) messages.push({ role: 'system', content: 'Only call tools actually listed in this request. Use forge_write_file and forge_edit_file when provided to save files, or the available shell tool. Do not invent apply_patch calls when it is absent. A successful tool result confirms a save; text describing code does not save it. Verify saved files before claiming completion. Free-form tools exposed as JSON require their exact original input in the input string.' });
   const items = typeof input.input === 'string' ? [{ role: 'user', content: input.input }] : input.input || [];
+  // Runtime tools can change when resuming a chat, changing model/mode, or
+  // reconnecting plugins. Past calls are history, not new tool permissions.
+  const historicalNames = new Map();
+  const reservedNames = new Set(toolMap.keys());
+  function historyName(item) {
+    if (typeof item.name !== 'string' || !item.name) throw new Error('A historical tool call has no name.');
+    const namespace = item.namespace || '';
+    const matches = [...toolMap.entries()].filter(([, tool]) => tool.name === item.name && (!namespace || tool.namespace === namespace));
+    const exact = matches.find(([, tool]) => tool.namespace === namespace);
+    if (exact || !namespace && matches.length === 1) return (exact || matches[0])[0];
+    const identity = JSON.stringify([namespace, item.name]);
+    if (historicalNames.has(identity)) return historicalNames.get(identity);
+    const base = `${namespace ? namespace + '__' : ''}${item.name}`.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
+    let name = base, index = 0;
+    while (reservedNames.has(name)) {
+      const suffix = `_history_${++index}`;
+      name = base.slice(0, 64 - suffix.length) + suffix;
+    }
+    reservedNames.add(name);
+    historicalNames.set(identity, name);
+    return name;
+  }
   for (const item of items) {
     if (item.type === 'reasoning') continue;
     if (['function_call', 'custom_tool_call'].includes(item.type)) {
-      const namespace = item.namespace || '';
-      const entry = [...toolMap.entries()].find(([, value]) => value.name === item.name && value.namespace === namespace)
-        || [...toolMap.entries()].find(([, value]) => value.name === item.name);
-      if (!entry) throw new Error(`The previous ${item.name} tool is unavailable in this request.`);
+      const name = historyName(item);
       const recovered = item.type === 'function_call' ? recoverFileOperationCall(item, toolMap) : null;
-      const call = { id: item.call_id, type: 'function', function: recovered || { name: entry[0], arguments: item.type === 'custom_tool_call' ? JSON.stringify({ input: item.input || '' }) : item.arguments || '{}' } };
+      const call = { id: item.call_id, type: 'function', function: recovered || { name, arguments: item.type === 'custom_tool_call' ? JSON.stringify({ input: item.input || '' }) : item.arguments || '{}' } };
       const previous = messages.at(-1);
       if (previous?.role === 'assistant' && previous.tool_calls) previous.tool_calls.push(call);
       else messages.push({ role: 'assistant', content: null, tool_calls: [call] });
@@ -105,6 +124,7 @@ export function toChatRequest(input) {
       ? content.map((part) => part.text || '').join('\n') : content;
     messages.push({ role, content: normalized });
   }
+  if (historicalNames.size) messages.splice(input.instructions ? 1 : 0, 0, { role: 'system', content: 'Tool calls in conversation history record past actions. Some historical functions are no longer available. Only tools advertised for this request may be called now. Do not repeat or invent calls to removed tools.' });
   const { value: toolChoice, allowedNames } = translateToolChoice(input.tool_choice, toolMap, tools.length > 0);
   const requestTools = allowedNames ? tools.filter((tool) => allowedNames.has(tool.function.name)) : tools;
   return { request: { messages, ...(requestTools.length ? {

@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.43
+
+- Fix "The previous exec_command tool is unavailable in this request" when an existing conversation contains tools absent from the current runtime request.
+- Preserve historical function/custom calls, arguments, call IDs, and outputs independently from currently executable tools.
+- Keep removed tools out of advertised schemas, discovery, and executable-call validation; disabled and restricted tool choices still apply.
+- Preserve namespace identity and avoid adapter-name collisions when tool availability changes across requests.
+- Add regression checks and verify both current-tool and tool-disabled continuations against the live Kilo Free gateway.
+
 ## 1.0.42
 
 - Open the OmniRoute dashboard through the desktop's Windows browser integration, including loopback HTTP links and custom local gateway ports.
