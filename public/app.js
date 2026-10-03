@@ -24,6 +24,7 @@ const state = {
   messages: [],
   codePreviewViews: new Map(),
   pendingImages: [],
+  pendingFiles: [],
   messageEditTarget: null,
   activeTurnId: null,
   turnStartedAt: null,
@@ -1450,6 +1451,7 @@ function beginMessageEdit(message) {
   if (state.isBusy || state.threadLoading) return;
   state.messageEditTarget = { id: message.id, turnId: message.turnId || null, text: message.text };
   setPendingImages(message.images || []);
+  setPendingFiles(message.files || []);
   $('#prompt-input').value = message.text;
   resizeComposer();
   renderMessageEditBanner();
@@ -1461,6 +1463,7 @@ function cancelMessageEdit() {
   state.messageEditTarget = null;
   $('#prompt-input').value = '';
   setPendingImages([]);
+  setPendingFiles([]);
   resizeComposer();
   renderMessageEditBanner();
 }
@@ -1483,6 +1486,10 @@ const IMAGE_FILE_LIMIT = 5 * 1024 * 1024;
 const IMAGE_TOTAL_LIMIT = 9 * 1024 * 1024;
 const IMAGE_COUNT_LIMIT = 4;
 const IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
+const IMAGE_EXTENSIONS = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp', '.gif': 'image/gif' };
+const OTHER_FILE_LIMIT = 5 * 1024 * 1024;
+const OTHER_FILE_TOTAL_LIMIT = 9 * 1024 * 1024;
+const OTHER_FILE_COUNT_LIMIT = 4;
 
 function imageFileToDataUrl(file) {
   return new Promise((resolve, reject) => {
@@ -1496,28 +1503,55 @@ function imageFileToDataUrl(file) {
 function renderImageAttachmentTray() {
   const tray = $('#image-attachment-tray');
   tray.replaceChildren();
-  tray.hidden = state.pendingImages.length === 0;
-  for (const image of state.pendingImages) {
+  const attachments = [
+    ...state.pendingImages.map((image) => ({ ...image, kind: 'image' })),
+    ...state.pendingFiles.map((file) => ({ ...file, kind: 'file' })),
+  ];
+  tray.hidden = attachments.length === 0;
+  for (const attachment of attachments) {
     const item = document.createElement('div');
-    item.className = 'image-attachment';
-    const preview = document.createElement('img');
-    preview.src = imageDataUrl(image);
-    preview.alt = '';
-    const name = document.createElement('span');
-    name.className = 'image-attachment-name';
-    name.textContent = image.name;
+    item.className = attachment.kind === 'image' ? 'image-attachment' : 'file-attachment';
+    if (attachment.kind === 'image') {
+      const preview = document.createElement('img');
+      preview.src = imageDataUrl(attachment);
+      preview.alt = '';
+      item.append(preview);
+      const name = document.createElement('span');
+      name.className = 'image-attachment-name';
+      name.textContent = attachment.name;
+      item.append(name);
+    } else {
+      const mark = document.createElement('span');
+      mark.className = 'file-attachment-mark';
+      mark.textContent = attachment.name.includes('.') ? attachment.name.split('.').pop().slice(0, 4) : 'FILE';
+      const copy = document.createElement('span');
+      copy.className = 'file-attachment-copy';
+      const name = document.createElement('strong');
+      name.textContent = attachment.name;
+      name.title = attachment.relativePath || attachment.name;
+      const size = document.createElement('small');
+      size.textContent = attachment.relativePath ? 'From this project · .forge-attachments' : `${formatFileSize(attachment.size)} · saved with message`;
+      copy.append(name, size);
+      item.append(mark, copy);
+    }
     const remove = document.createElement('button');
     remove.className = 'image-attachment-remove';
     remove.type = 'button';
-    remove.setAttribute('aria-label', `Remove ${image.name}`);
+    remove.setAttribute('aria-label', `Remove ${attachment.name}`);
     remove.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 4 8 8m0-8-8 8"/></svg>';
     remove.addEventListener('click', () => {
-      state.pendingImages = state.pendingImages.filter((entry) => entry.id !== image.id);
+      if (attachment.kind === 'image') state.pendingImages = state.pendingImages.filter((entry) => entry.id !== attachment.id);
+      else state.pendingFiles = state.pendingFiles.filter((entry) => entry.id !== attachment.id);
       renderImageAttachmentTray();
     });
-    item.append(preview, name, remove);
+    item.append(remove);
     tray.append(item);
   }
+}
+
+function formatFileSize(bytes) {
+  const size = Number(bytes) || 0;
+  return size < 1024 * 1024 ? `${Math.max(1, Math.round(size / 1024))} KB` : `${(size / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function setPendingImages(images = []) {
@@ -1535,14 +1569,53 @@ async function addImageFiles(files) {
   const candidates = Array.from(files || []);
   if (!candidates.length) return;
   for (const file of candidates) {
-    if (!IMAGE_TYPES.has(file.type)) { showToast('Choose a PNG, JPEG, WebP, or GIF image.', 'error'); continue; }
+    const extension = String(file.name || '').match(/\.[^.]+$/)?.[0]?.toLowerCase() || '';
+    const mediaType = IMAGE_TYPES.has(file.type) ? file.type : IMAGE_EXTENSIONS[extension];
+    if (!mediaType) { showToast('Choose a PNG, JPEG, WebP, or GIF image.', 'error'); continue; }
     if (file.size > IMAGE_FILE_LIMIT) { showToast(`${file.name} is over the 5 MB image limit.`, 'error'); continue; }
     if (state.pendingImages.length >= IMAGE_COUNT_LIMIT) { showToast('Attach up to four images per message.', 'error'); break; }
     const total = state.pendingImages.reduce((sum, image) => sum + image.size, 0);
     if (total + file.size > IMAGE_TOTAL_LIMIT) { showToast('Keep attached images under 9 MB total.', 'error'); break; }
     try {
       const dataUrl = await imageFileToDataUrl(file);
-      state.pendingImages.push({ id: crypto.randomUUID(), name: file.name || 'image', mediaType: file.type, size: file.size, dataUrl });
+      state.pendingImages.push({ id: crypto.randomUUID(), name: file.name || 'image', mediaType, size: file.size, dataUrl });
+      renderImageAttachmentTray();
+    } catch (error) {
+      showToast(error.message, 'error');
+    }
+  }
+}
+
+function setPendingFiles(files = []) {
+  state.pendingFiles = (Array.isArray(files) ? files : []).map((file) => ({
+    id: file.id || crypto.randomUUID(),
+    name: String(file.name || 'file'),
+    mediaType: String(file.mediaType || 'application/octet-stream'),
+    size: Number(file.size || 0),
+    base64: typeof file.base64 === 'string' ? file.base64 : '',
+    relativePath: typeof file.relativePath === 'string' ? file.relativePath : '',
+  }));
+  renderImageAttachmentTray();
+}
+
+async function addAttachmentFiles(files) {
+  for (const file of Array.from(files || [])) {
+    const extension = String(file.name || '').match(/\.[^.]+$/)?.[0]?.toLowerCase() || '';
+    if (IMAGE_TYPES.has(file.type) || IMAGE_EXTENSIONS[extension]) {
+      await addImageFiles([file]);
+      continue;
+    }
+    if (!state.workspace) { showToast('Open a project folder before attaching files.', 'error'); break; }
+    if (!file.size) { showToast(`${file.name || 'That file'} is empty and cannot be attached.`, 'error'); continue; }
+    if (file.size > OTHER_FILE_LIMIT) { showToast(`${file.name} is over the 5 MB file limit.`, 'error'); continue; }
+    if (state.pendingFiles.length >= OTHER_FILE_COUNT_LIMIT) { showToast('Attach up to four other files per message.', 'error'); break; }
+    const total = state.pendingFiles.reduce((sum, attachment) => sum + attachment.size, 0);
+    if (total + file.size > OTHER_FILE_TOTAL_LIMIT) { showToast('Keep attached files under 9 MB total.', 'error'); break; }
+    try {
+      const dataUrl = await imageFileToDataUrl(file);
+      const separator = dataUrl.indexOf(',');
+      if (separator < 0) throw new Error(`Could not read ${file.name || 'that file'}.`);
+      state.pendingFiles.push({ id: crypto.randomUUID(), name: file.name || 'file', mediaType: file.type || 'application/octet-stream', size: file.size, base64: dataUrl.slice(separator + 1), relativePath: '' });
       renderImageAttachmentTray();
     } catch (error) {
       showToast(error.message, 'error');
@@ -1553,14 +1626,14 @@ async function addImageFiles(files) {
 async function retryUserMessage(message) {
   if (state.isBusy || state.threadLoading) return;
   if (!message.turnId) {
-    await sendMessage(message.text, { replaceMessageId: message.id, imagesOverride: message.images || [] });
+    await sendMessage(message.text, { replaceMessageId: message.id, imagesOverride: message.images || [], filesOverride: message.files || [] });
     return;
   }
   try {
     state.threadLoading = true;
     renderSurface();
     await openBranchBeforeMessage(message);
-    await sendMessage(message.text, { imagesOverride: message.images || [] });
+    await sendMessage(message.text, { imagesOverride: message.images || [], filesOverride: message.files || [] });
   } catch (error) {
     state.threadLoading = false;
     renderSurface();
@@ -2547,6 +2620,7 @@ function renderMessage(message) {
       }
     }
     appendMessageImages(user, message.images);
+    appendMessageFiles(user, message.files);
     if (!state.threadLoading) {
       const actions = document.createElement('div');
       actions.className = 'user-message-actions';
@@ -2652,6 +2726,24 @@ function appendMessageImages(container, images = []) {
     grid.append(preview);
   }
   container.append(grid);
+}
+
+function appendMessageFiles(container, files = []) {
+  if (!Array.isArray(files) || !files.length) return;
+  const list = document.createElement('div');
+  list.className = 'message-file-attachments';
+  for (const file of files) {
+    const item = document.createElement('div');
+    item.className = 'message-file-attachment';
+    if (file.relativePath) item.title = file.relativePath;
+    const extension = document.createElement('span');
+    extension.textContent = String(file.name || 'file').includes('.') ? String(file.name).split('.').pop().slice(0, 4) : 'FILE';
+    const name = document.createElement('strong');
+    name.textContent = file.name || 'Attached file';
+    item.append(extension, name);
+    list.append(item);
+  }
+  container.append(list);
 }
 
 function parseAgentAssignment(text) {
@@ -3690,7 +3782,7 @@ function cacheThreadHistory(threadId, result) {
   while (state.threadHistoryCache.size > 12) state.threadHistoryCache.delete(state.threadHistoryCache.keys().next().value);
 }
 
-const SESSION_FIELDS = ['sessionKey','threadId','threadProviderId','threadName','messages','historyVisibleCount','workspace','approvals','activeTurnId','isBusy','pendingSend','selectedFile','activeContextTab','diff','turnStartedAt','activityStatus','fallbackSourceThreadId','questionDrafts','questionSending','pendingImages','composerPluginMentions','messageEditTarget','codePreviewViews','changePreview','modelId','effort','draftText','preferredAccess'];
+const SESSION_FIELDS = ['sessionKey','threadId','threadProviderId','threadName','messages','historyVisibleCount','workspace','approvals','activeTurnId','isBusy','pendingSend','selectedFile','activeContextTab','diff','turnStartedAt','activityStatus','fallbackSourceThreadId','questionDrafts','questionSending','pendingImages','pendingFiles','composerPluginMentions','messageEditTarget','codePreviewViews','changePreview','modelId','effort','draftText','preferredAccess'];
 function captureThreadView() {
   return { ...Object.fromEntries(SESSION_FIELDS.map(field=>[field,state[field]])), startingTurn, liveActivities,
     threadId: state.threadId,
@@ -3711,7 +3803,7 @@ function captureThreadView() {
 
 function saveCurrentSession() {
   state.draftText = $('#prompt-input').value;
-  if (state.threadId || state.isBusy || state.messages.length || state.draftText) return sessions.save(captureThreadView());
+  if (state.threadId || state.isBusy || state.messages.length || state.draftText || state.pendingImages.length || state.pendingFiles.length) return sessions.save(captureThreadView());
   return null;
 }
 function restoreSessionView(view) {
@@ -3726,9 +3818,10 @@ function resetSessionView() {
   state.isBusy = false; state.pendingSend = false; state.turnStartedAt = null;
   state.fallbackSourceThreadId = null; state.activityStatus = 'Starting task';
   state.questionDrafts = new Map(); state.questionSending = new Set(); state.codePreviewViews = new Map();
-  state.pendingImages = []; state.composerPluginMentions = []; state.changePreview = null;
+  state.pendingImages = []; state.pendingFiles = []; state.composerPluginMentions = []; state.changePreview = null;
   state.approvalRenderSignature = ''; startingTurn = null; liveActivities = createLiveActivityTracker();
   setPendingImages([]);
+  setPendingFiles([]);
 }
 function inSession(record, action) {
   if (record.key === state.sessionKey) { const result=action(); sessions.save(captureThreadView()); return result; }
@@ -3810,7 +3903,7 @@ async function openThread(threadId) {
     try { for (const event of live.events.splice(0)) handleCodexEvent(event); }
     finally { backgroundSessionUpdate=previous; }
     sessions.save(captureThreadView());
-    $('#prompt-input').value=state.draftText || ''; setPendingImages(state.pendingImages || []); resizeComposer();
+    $('#prompt-input').value=state.draftText || ''; setPendingImages(state.pendingImages || []); setPendingFiles(state.pendingFiles || []); resizeComposer();
     $('#access-select').value=state.mode==='chat'?'read':state.preferredAccess;syncAskModeButton();
     renderAll();
     if (!state.threadId) return;
@@ -3872,12 +3965,15 @@ async function openThread(threadId) {
     state.diff = previous.diff;
     state.threadLoading = false;
     state.threadLoadOrigin = null;
+    $('#prompt-input').value = previous.draftText || '';
+    setPendingImages(previous.pendingImages || []);
+    setPendingFiles(previous.pendingFiles || []);
     renderAll();
     showToast(error.message, 'error');
   }
 }
 
-async function sendMessage(textOverride, { readOnlyOverride, routingText, replaceMessageId, imagesOverride } = {}) {
+async function sendMessage(textOverride, { readOnlyOverride, routingText, replaceMessageId, imagesOverride, filesOverride } = {}) {
   if (state.isBusy) return;
   if (state.threadLoading) { showToast('Wait for the selected session to finish opening.'); return; }
   if (!state.workspace) { openWorkspaceDialog(); return; }
@@ -3891,7 +3987,13 @@ async function sendMessage(textOverride, { readOnlyOverride, routingText, replac
     const dataUrl = imageDataUrl(image);
     return { ...image, dataUrl, mediaType: imageMediaType(image, dataUrl) };
   }).filter((image) => image.dataUrl);
-  if (!text && !selectedImages.length) return;
+  const selectedFiles = (filesOverride ?? state.pendingFiles).map((file) => ({
+    ...file,
+    name: String(file.name || 'file'),
+    mediaType: String(file.mediaType || 'application/octet-stream'),
+    size: Number(file.size || 0),
+  }));
+  if (!text && !selectedImages.length && !selectedFiles.length) return;
   if (!selectedModel) {
     showToast(state.autoModelRouting ? 'Automatic routing needs a GPT-6 model in your Codex account. No GPT-5.6 fallback was used.' : 'Choose an available model before sending.', 'error');
     return;
@@ -3945,16 +4047,17 @@ async function sendMessage(textOverride, { readOnlyOverride, routingText, replac
   state.turnStartedAt = Date.now();
   liveActivities.reset();
   state.activityStatus = automaticRoute ? `Auto · ${selectedModel.name} · ${automaticRoute.reason}` : 'Starting task';
-  const userMessage = { id: `user-${Date.now()}`, role: 'user', text, images: selectedImages, threadId: state.threadId };
+  const userMessage = { id: `user-${Date.now()}`, role: 'user', text, images: selectedImages, files: selectedFiles.map(({ name, mediaType, size, base64, relativePath }) => ({ name, mediaType, size, base64: base64 || '', relativePath: relativePath || '' })), threadId: state.threadId };
   state.messages.push(userMessage);
   state.messages.push({ id: `pending-${Date.now()}`, role: 'assistant', turnId: null, text: '', pending: true });
   textarea.value = '';
   state.composerPluginMentions = [];
   closePluginMentionMenu();
   setPendingImages([]);
+  setPendingFiles([]);
   resizeComposer();
   const assignment = parseAgentAssignment(text);
-  state.threadName ||= (assignment ? `Delegate ${assignment.name}` : (text || 'Review attached image')).replace(/\s+/g, ' ').slice(0, 64);
+  state.threadName ||= (assignment ? `Delegate ${assignment.name}` : (text || (selectedImages.length ? 'Review attached image' : 'Review attached file'))).replace(/\s+/g, ' ').slice(0, 64);
   renderSurface();
   const start = startingTurn = { requestId: crypto.randomUUID(), controller: new AbortController() };
   state.draftText = '';
@@ -3974,6 +4077,7 @@ async function sendMessage(textOverride, { readOnlyOverride, routingText, replac
         mediaType: image.mediaType,
         base64: image.dataUrl.slice(image.dataUrl.indexOf(',') + 1),
       })),
+      files: selectedFiles.map((file) => ({ name: file.name, mediaType: file.mediaType, size: file.size, base64: file.base64 || '', relativePath: file.relativePath || '' })),
       effort: state.effort,
       readOnly: $('#access-select').value === 'plan' || (readOnlyOverride ?? ($('#access-select').value === 'read')),
       planningMode: $('#access-select').value === 'plan',
@@ -3982,6 +4086,7 @@ async function sendMessage(textOverride, { readOnlyOverride, routingText, replac
     inSession(owner, () => {
     state.threadId = result.threadId;
     userMessage.threadId = result.threadId;
+    userMessage.files = result.files || userMessage.files;
     state.threadProviderId = result.providerId || 'openai';
     if (result.providerId === 'forge-free') {
       selectFreeRouteModel();
@@ -4672,9 +4777,47 @@ $$('.idea-card').forEach((button) => button.addEventListener('click', () => {
 $('#send-button').addEventListener('click', () => sendMessage());
 $('#attach-image').addEventListener('click', () => $('#image-input').click());
 $('#image-input').addEventListener('change', (event) => {
-  void addImageFiles(event.currentTarget.files);
+  void addAttachmentFiles(event.currentTarget.files);
   event.currentTarget.value = '';
 });
+const composerDropZone = $('#composer-shell');
+const composerDropOverlay = $('#composer-drop-overlay');
+let composerDragDepth = 0;
+function carriesFiles(event) {
+  return Array.from(event.dataTransfer?.types || []).includes('Files');
+}
+function clearComposerDropState() {
+  composerDragDepth = 0;
+  composerDropZone.classList.remove('is-dragover');
+  composerDropOverlay.hidden = true;
+}
+window.addEventListener('dragover', (event) => { if (carriesFiles(event)) event.preventDefault(); });
+window.addEventListener('drop', (event) => { if (carriesFiles(event)) event.preventDefault(); });
+composerDropZone.addEventListener('dragenter', (event) => {
+  if (!carriesFiles(event)) return;
+  event.preventDefault();
+  composerDragDepth++;
+  composerDropZone.classList.add('is-dragover');
+  composerDropOverlay.hidden = false;
+});
+composerDropZone.addEventListener('dragover', (event) => {
+  if (!carriesFiles(event)) return;
+  event.preventDefault();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
+});
+composerDropZone.addEventListener('dragleave', (event) => {
+  if (!carriesFiles(event)) return;
+  composerDragDepth = Math.max(0, composerDragDepth - 1);
+  if (composerDragDepth === 0 || !composerDropZone.contains(event.relatedTarget)) clearComposerDropState();
+});
+composerDropZone.addEventListener('drop', (event) => {
+  if (!carriesFiles(event)) return;
+  event.preventDefault();
+  clearComposerDropState();
+  if (!state.workspace) { showToast('Open a project folder before attaching files.', 'error'); return; }
+  void addAttachmentFiles(event.dataTransfer?.files);
+});
+window.addEventListener('blur', clearComposerDropState);
 $('#cancel-message-edit').addEventListener('click', cancelMessageEdit);
 $('#prompt-input').addEventListener('input', () => { resizeComposer(); void updatePluginMentionMenu(); });
 window.addEventListener('forge:appearance', resizeComposer);

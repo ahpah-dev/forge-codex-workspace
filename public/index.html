@@ -129,16 +129,17 @@
           </section>
 
           <div class="composer-dock" id="composer-dock">
-            <div class="composer-shell">
+            <div class="composer-shell" id="composer-shell">
               <div class="composer-resize-grip" id="composer-resize-grip" role="separator" aria-label="Resize chatbox height" aria-orientation="horizontal" tabindex="0" title="Drag to resize · double-click for automatic height"><span></span></div>
+              <div class="composer-drop-overlay" id="composer-drop-overlay" role="status" aria-live="polite" hidden><span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m-5 5 5-5 5 5M4 15v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4"/></svg>Drop files to attach</span></div>
               <div class="message-edit-banner" id="message-edit-banner" hidden><span>Editing a previous message · sending creates a branch</span><button type="button" id="cancel-message-edit" aria-label="Cancel editing">Cancel</button></div>
-              <div class="image-attachment-tray" id="image-attachment-tray" aria-label="Image attachments" hidden></div>
+              <div class="image-attachment-tray" id="image-attachment-tray" aria-label="Attachments" hidden></div>
               <textarea id="prompt-input" rows="3" placeholder="Find a small todo in the codebase and do it" aria-label="Message Codex" aria-autocomplete="list" aria-controls="plugin-mention-menu" aria-expanded="false"></textarea>
               <div class="plugin-mention-menu" id="plugin-mention-menu" role="listbox" aria-label="Installed Codex plugins" hidden><div class="plugin-mention-heading">Mention a plugin</div><div class="plugin-mention-options" id="plugin-mention-options"></div></div>
-              <input id="image-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden>
+              <input id="image-input" type="file" multiple hidden>
               <div class="composer-bottom">
                 <div class="composer-controls">
-                  <button class="attach-image-button" id="attach-image" type="button" aria-label="Attach images" title="Attach images, or paste an image from the clipboard"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9" r="1.5"/><path d="m21 15-5-5L5 20"/></svg></button>
+                  <button class="attach-image-button" id="attach-image" type="button" aria-label="Attach images and files" title="Attach images and files, or paste an image from the clipboard"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8.5 12.5 6.9-6.9a3.2 3.2 0 0 1 4.5 4.5l-8.8 8.8a5.1 5.1 0 0 1-7.2-7.2l8.1-8.1"/></svg></button>
                   <div class="model-picker" id="model-picker">
                     <button class="model-picker-trigger" id="model-picker-trigger" type="button" aria-haspopup="listbox" aria-expanded="false" aria-controls="model-options" title="Choose a model" disabled>
                       <span class="model-picker-mark tier-default" id="model-picker-mark" aria-hidden="true"></span>

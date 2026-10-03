@@ -2,7 +2,7 @@
 
 [Visit the Forge website](https://davidegeric-cloud.github.io/forge-codex-workspace/) · [Download for Windows](https://github.com/davidegeric-cloud/forge-codex-workspace/releases/latest) · [MIT license](LICENSE)
 
-Forge is a free, MIT-licensed desktop AI workspace for Codex, Claude Code, and external APIs such as OpenRouter and NVIDIA. It includes a project browser, file changes, terminal activity, approval prompts, live agent task summaries, and image attachments through file selection or clipboard paste. Codex uses the account already signed in on this Windows user profile and its standard model catalog and rate limits. Claude Code and custom providers use their own accounts and access.
+Forge is a free, MIT-licensed desktop AI workspace for Codex, Claude Code, and external APIs such as OpenRouter and NVIDIA. It includes a project browser, file changes, terminal activity, approval prompts, live agent task summaries, and image and file attachments through drag and drop or the file picker. Codex uses the account already signed in on this Windows user profile and its standard model catalog and rate limits. Claude Code and custom providers use their own accounts and access.
 
 ## Screenshots
 
@@ -22,9 +22,11 @@ Screenshots use a local demo project with generic account details.
 
 File edits appear in expandable code cards with line numbers and additions/removals. While a task is running, **Follow code** keeps the latest patch lines visible; scroll up to pause following. Claude Write/Edit inputs stream during generation. Codex and external providers show patches whenever their runtime exposes them, so some edits arrive as a complete patch rather than character by character. Proposed edits are not marked as applied until the tool finishes.
 
+Drop images or files onto the composer, or use its attachment button. Images show previews. Other files are copied into `.forge-attachments` inside the selected project when sent, so the model can open them with the project tools. Attach up to four images and four other files at a time; each attachment can be up to 5 MB.
+
 Download the latest Windows x64 installer from [GitHub Releases](https://github.com/davidegeric-cloud/forge-codex-workspace/releases/latest). Run the installer, then launch Forge from the Start menu or desktop shortcut. Sign in to Codex once in the Codex app or Codex CLI; Forge uses that saved local account automatically.
 
-To build the installer yourself, use Node.js 24.15 or newer on Windows x64, run `npm install`, then `npm run dist:win`. The installer is written to `release/Forge-Setup-1.0.45-x64.exe`. The desktop app bundles its Codex runtime and does not need a global Node.js install.
+To build the installer yourself, use Node.js 24.15 or newer on Windows x64, run `npm install`, then `npm run dist:win`. The installer is written to `release/Forge-Setup-1.0.46-x64.exe`. The desktop app bundles its Codex runtime and does not need a global Node.js install.
 
 ## Start from source
 

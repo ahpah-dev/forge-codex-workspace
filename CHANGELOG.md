@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.46
+
+- Drag images and other files onto the chat composer, or attach them with the file picker.
+- Show image previews and file cards before sending; keep pending files with their chat, and reuse them when retrying a message.
+- Copy other files into .forge-attachments in the selected project so Codex and configured providers can open them.
+- Limit image attachments to four per message and other files to four per message; keep each image or file within 5 MB and each type under 9 MB total.
+
 ## 1.0.45
 
 - Run multiple sessions at the same time. New task and session switching keep background tasks running.

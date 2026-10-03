@@ -15,7 +15,7 @@ globalThis.ForgeSessions = {
       if (records.size > 24) {
         for (const [key, older] of records) {
           if (records.size <= 24) break;
-          if (key !== record.key && !older.running && !older.events.length && !older.waiting.size && !older.view.draftText && !older.view.pendingImages?.length) records.delete(key);
+          if (key !== record.key && !older.running && !older.events.length && !older.waiting.size && !older.view.draftText && !older.view.pendingImages?.length && !older.view.pendingFiles?.length) records.delete(key);
         }
       }
       return record;
