@@ -50,6 +50,7 @@ let settings = await loadSettings();
 let activeWorkspace = await normalizeSavedWorkspace(settings.activeWorkspace);
 let port = Number.parseInt(process.env.FORGE_PORT || '4173', 10);
 let initialAppState = null;
+let settingsRevision = 0;
 let threadOpenRevision = 0;
 const turnRequests = new Map();
 const turnErrors = new Map();
@@ -131,6 +132,8 @@ async function loadSettings() {
 }
 
 async function saveSettings() {
+  settingsRevision += 1;
+  initialAppState = null;
   await mkdir(dataRoot, { recursive: true });
   await writeFile(settingsPath, `${JSON.stringify(settings, null, 2)}\n`, 'utf8');
 }
@@ -1632,9 +1635,13 @@ if (process.env.FORGE_IN_APP_BROWSER === '1') {
   process.env.FORGE_BROWSER_API_TOKEN = bridgeToken;
 }
 console.log(`Forge is ready at ${localUrl}`);
+const startupSettingsRevision = settingsRevision;
 const accountWarmup = codex.ensureStarted()
   .then(getAppState)
-  .then((snapshot) => { initialAppState = snapshot; console.log('Synced the saved Codex account.'); })
+  .then((snapshot) => {
+    if (settingsRevision === startupSettingsRevision) initialAppState = snapshot;
+    console.log('Synced the saved Codex account.');
+  })
   .catch((error) => console.warn(`Codex account connection will retry when Forge opens: ${error.message}`));
 await Promise.race([accountWarmup, new Promise((resolve) => setTimeout(resolve, 1500))]);
 openBrowser(localUrl);
