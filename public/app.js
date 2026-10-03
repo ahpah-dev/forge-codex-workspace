@@ -618,6 +618,20 @@ async function startOmniRoute() {
   try { await api('/api/omniroute/start', { method: 'POST', body: {} }); await refreshOmniRoute(); }
   catch (error) { $('#omniroute-status').textContent = error.message; $('#omniroute-start').disabled = false; }
 }
+async function openOmniRouteDashboard(event) {
+  event.preventDefault();
+  const desktop=window.ForgeDesktop?.openExternalUrl;
+  const popup=desktop ? null : window.open('about:blank','_blank');
+  if (popup) popup.opener=null;
+  const button=$('#omniroute-dashboard');button.textContent='Opening…';
+  try {
+    const result=await api('/api/omniroute/dashboard',{method:'POST',body:{baseUrl:$('#provider-base-url').value}});
+    if(desktop)await window.ForgeDesktop.openExternalUrl(result.url);
+    else if(popup)popup.location.replace(result.url);
+    else throw new Error('Allow browser pop-ups to open the OmniRoute dashboard.');
+  }catch(error){popup?.close();showProviderError(error.message);}
+  finally{button.textContent='Open dashboard ↗';}
+}
 
 async function discoverProviderModels() {
   const button = $('#provider-discover');
@@ -3063,6 +3077,13 @@ function handleCodexEvent(event) {
     if (state.activeTurnId && params.turnId && params.turnId !== state.activeTurnId) return;
   }
   if (method === 'routing/model/selected') {
+    if (params.route.ownerProviderId) {
+      if (params.threadId !== state.threadId || params.route.ownerProviderId !== state.threadProviderId) return;
+      const label=`${params.route.fallback ? 'OmniRoute fallback · ' : ''}${params.route.providerName} · ${params.route.name}`;
+      const previous=state.messages.at(-1);
+      if(previous?.role!=='routing' || previous.text!==label)state.messages.push({role:'routing',text:label});
+      setActivityStatus(`Using ${params.route.name}`);renderSurface();return;
+    }
     state.freeRouting.lastRoute = params.route;
     if (state.threadProviderId === 'forge-free') {
       const label = `${params.route.provider === 'nvidia' ? 'NVIDIA NIM' : 'OpenRouter free'} · ${params.route.name}`;
@@ -4564,6 +4585,7 @@ $('#manage-providers').addEventListener('click', openProvidersDialog);
 $('#anthropic-connect').addEventListener('click', () => { void connectAnthropic(); });
 $$('.provider-preset').forEach((button) => button.addEventListener('click', () => selectProviderPreset(button.dataset.providerPreset)));
 $('#omniroute-start').addEventListener('click', startOmniRoute);
+$('#omniroute-dashboard').addEventListener('click', openOmniRouteDashboard);
 $('#provider-discover').addEventListener('click', discoverProviderModels);
 $('#provider-save').addEventListener('click', saveProvider);
 $('#provider-cancel-edit').addEventListener('click', resetProviderForm);

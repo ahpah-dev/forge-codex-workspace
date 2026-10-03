@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.42
+
+- Open the OmniRoute dashboard through the desktop's Windows browser integration, including loopback HTTP links and custom local gateway ports.
+- Start an installed gateway when opening its dashboard and show actionable startup errors in the provider panel.
+- Recover OmniRoute free auto routes from OpenCode-only access restrictions, invalid credentials, quota limits, unavailable upstreams, and errors before streaming begins.
+- Try compatible Kilo, OpenRouter, Groq, and NVIDIA integrations using keys already saved in Forge; OpenRouter fallback discovers zero-price models with tool support.
+- Remember a responding route, cool down rejected routes, display the selected fallback in chat, and reset routing when provider settings change.
+- Preserve Codex tool execution and project instructions across fallback; never replay partial output or switch providers during output-limit continuation.
+- Add desktop-link, routing, dashboard, and live file-operation regression coverage.
+
 ## 1.0.41
 
 - Add native local OmniRoute setup with an in-app installer, startup/status feedback, dashboard access, optional gateway key, and persisted provider configuration.

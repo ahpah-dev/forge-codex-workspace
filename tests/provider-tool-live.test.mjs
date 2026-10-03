@@ -7,18 +7,22 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { bridgeResponses, createChatProviderRouter, providerBaseInstructions } from '../responses-bridge.mjs';
 import { decryptProviderKey, readEncryptedProviderKeys } from '../provider-secrets.mjs';
+import { createOmniRouteRouting, omniRouteFallbacks } from '../omniroute-routing.mjs';
+import { createOmniRouteManager, OMNIROUTE_BASE_URL } from '../omniroute-manager.mjs';
 
-for (const {providerId,task} of [{providerId:'groq-free',task:'files'},{providerId:'groq-free',task:'chat'},{providerId:'kilo-free-router',task:'files'}]) test(task==='chat' ? `${providerId} GPT-OSS 20B answers a normal native Codex request` : `${providerId} creates and edits real files with over 250 available tools`, { skip: process.env.FORGE_TOOL_LIVE !== '1', timeout: 360000 }, async () => {
+for (const {providerId,task} of [{providerId:'groq-free',task:'files'},{providerId:'groq-free',task:'chat'},{providerId:'kilo-free-router',task:'files'},{providerId:'omniroute-local',task:'files'}]) test(task==='chat' ? `${providerId} GPT-OSS 20B answers a normal native Codex request` : `${providerId} creates and edits real files with over 250 available tools`, { skip: process.env.FORGE_TOOL_LIVE !== '1', timeout: 360000 }, async () => {
   const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
   const data = process.env.FORGE_TOOL_DATA || path.join(process.env.APPDATA, 'forge-codex-workspace', 'data');
   const settings = JSON.parse(await readFile(path.join(data, 'settings.json'), 'utf8'));
-  const provider = settings.providers.find((p) => p.id === providerId);
+  const omni=providerId==='omniroute-local';
+  const provider = settings.providers.find((p) => p.id === providerId) || (omni?{id:providerId,name:'OmniRoute Local',nativePreset:'omniroute',baseUrl:OMNIROUTE_BASE_URL}:null);
   assert.ok(provider, 'Configure this provider in Forge first');
   const keys = await readEncryptedProviderKeys(path.join(data, 'provider-secrets.json'));
-  const key = await decryptProviderKey(keys[provider.id]);
-  const model = providerId === 'groq-free' ? task==='chat' ? 'openai/gpt-oss-20b' : process.env.FORGE_GROQ_CHECK_MODEL || 'openai/gpt-oss-120b' : 'kilo-auto/free';
+  const key = keys[provider.id] ? await decryptProviderKey(keys[provider.id]) : '';
+  const model = omni ? 'auto/coding:free' : providerId === 'groq-free' ? task==='chat' ? 'openai/gpt-oss-20b' : process.env.FORGE_GROQ_CHECK_MODEL || 'openai/gpt-oss-120b' : 'kilo-auto/free';
+  const localGateway=omni?createOmniRouteManager({appRoot:root,dataRoot:path.join(root,'data/omniroute-check')}):null;
   let inferenceRequests=0;const toolCounts=[];
-  const makeRouter = () => createChatProviderRouter({ provider, model, key, fetchImpl: async (url, options) => {
+  const fetchImpl = async (url, options) => {
     const body=JSON.parse(options.body);inferenceRequests++;toolCounts.push(body.tools?.length || 0);
     if(inferenceRequests===1) {assert.ok(JSON.stringify(body.messages).includes('FORGE_PROJECT_RULE_PROBE'));assert.ok(JSON.stringify(body.messages).includes(task==='chat'?'FORGE_CHAT_PROBE':'Actually save both files'));}
     if(inferenceRequests===1) console.log(JSON.stringify({provider:providerId,outputBudget:body.max_tokens,messageChars:JSON.stringify(body.messages).length,toolChars:JSON.stringify(body.tools).length}));
@@ -26,10 +30,14 @@ for (const {providerId,task} of [{providerId:'groq-free',task:'files'},{provider
     const response = await fetch(url,options);
     if (!response.ok) {
       const detail = await response.clone().json().catch(() => ({}));
-      console.log(JSON.stringify({ provider: providerId, status: response.status, message: String(detail.error?.message || detail.message || '').split(key).join('[redacted]') }));
+      const requestKey=options.headers.Authorization?.replace(/^Bearer /,'');
+      const message=String(detail.error?.message || detail.message || '');
+      console.log(JSON.stringify({ provider: providerId, status: response.status, message: requestKey?message.split(requestKey).join('[redacted]'):message }));
     }
     return response;
-  } });
+  };
+  const routing=omni?createOmniRouteRouting({fetchImpl,getFallbacks:async()=>omniRouteFallbacks(settings.providers,id=>Boolean(keys[id]),id=>decryptProviderKey(keys[id]),fetchImpl),onRoute:route=>console.log(JSON.stringify({provider:providerId,selectedProvider:route.providerName,selectedModel:route.model,fallback:route.fallback}))}):null;
+  const makeRouter=()=>omni?routing.forProvider({provider,model,key,ensureGateway:()=>localGateway.start()}):createChatProviderRouter({provider,model,key,fetchImpl});
   const area = path.join(root, 'data', 'provider-tool-checks');
   await mkdir(area, { recursive: true });
   const workspace = await mkdtemp(path.join(area, 'run-'));
@@ -89,7 +97,7 @@ for (const {providerId,task} of [{providerId:'groq-free',task:'files'},{provider
     const batching = providerId === 'groq-free' ? 'For this check perform both file changes and their byte verification in one exec_command shell call to minimize API requests. ' : '';
     await rpc('turn/start', { threadId: started.thread.id, effort: 'medium', input: [{ type: 'text', text: task==='chat' ? 'FORGE_CHAT_PROBE: Reply exactly "Forge is ready." Do not call any tools or modify files.' : batching + 'Use your file tools to edit existing.txt: replace the exact JSON string "before\\n" with "after\\n". Create created.txt containing the exact JSON string "Provider saved this\\n". Here \\n means a real trailing LF byte, not the two characters backslash and n. Actually save both files on disk. Verify their bytes, including the final byte 10, and correct any missing trailing newline before completing. Only work in this current directory. Keep the final answer short.' }], sandboxPolicy: { type: 'workspaceWrite', writableRoots: [workspace], networkAccess: false } });
     const result = await completed;
-    assert.equal(result.status, 'completed', String(result.error?.message || '').split(key).join('[redacted]'));
+    assert.equal(result.status, 'completed', key?String(result.error?.message || '').split(key).join('[redacted]'):String(result.error?.message || ''));
     if(task==='chat') {
       assert.ok(events.some(event=>event.method==='item/completed' && event.params.item?.type==='agentMessage' && event.params.item.text?.trim()==='Forge is ready.'));
       assert.equal(await readFile(path.join(workspace,'existing.txt'),'utf8'),'before\n');
@@ -103,6 +111,7 @@ for (const {providerId,task} of [{providerId:'groq-free',task:'files'},{provider
     console.log(JSON.stringify({ provider:providerId, model, requests, inferenceRequests, toolCounts, verified: ['existing.txt edited', 'created.txt created'], workspace }));
   } finally {
     child.kill(); server.closeAllConnections(); await new Promise((resolve) => server.close(resolve));
+    await localGateway?.stop();
   }
 });
 

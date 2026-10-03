@@ -82,6 +82,16 @@ ipcMain.handle('forge:browser-open-external', async () => {
   await shell.openExternal(url);
   return { ok: true };
 });
+
+function isExternalPageUrl(target) {
+  try { const url=new URL(target);return !url.username && !url.password && (url.protocol==='https:' || url.protocol==='http:' && ['127.0.0.1','localhost','[::1]'].includes(url.hostname)); }
+  catch { return false; }
+}
+ipcMain.handle('forge:open-external-url', async (event, target) => {
+  if (event.sender !== mainWindow?.webContents || !isExternalPageUrl(target)) throw new Error('This page cannot be opened externally.');
+  await shell.openExternal(target);
+  return {opened:true};
+});
 ipcMain.on('forge:browser-layout', (event, layout) => {
   if (event.sender !== mainWindow?.webContents || !browserView || !layout || typeof layout !== 'object') return;
   const active = layout.active === true;
@@ -208,13 +218,13 @@ function createMainWindow(url) {
   }
   mainWindow.once('ready-to-show', () => mainWindow.show());
   mainWindow.webContents.setWindowOpenHandler(({ url: target }) => {
-    if (/^https:\/\//i.test(target)) void shell.openExternal(target);
+    if (isExternalPageUrl(target)) void shell.openExternal(target);
     return { action: 'deny' };
   });
   mainWindow.webContents.on('will-navigate', (event, target) => {
     if (!target.startsWith(url)) {
       event.preventDefault();
-      if (/^https:\/\//i.test(target)) void shell.openExternal(target);
+      if (isExternalPageUrl(target)) void shell.openExternal(target);
     }
   });
   mainWindow.loadURL(url);

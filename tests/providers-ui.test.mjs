@@ -69,6 +69,10 @@ test('provider setup opens with Free Auto Route enabled, long catalogs, small wi
     const localId=await page.evaluate(()=>state.providers.find(provider=>provider.nativePreset==='omniroute').id);
     await page.locator(`[data-provider-edit="${localId}"]`).click();
     assert.match(await page.locator('#provider-key-hint').innerText(),/Optional/);
+    await page.route('**/api/omniroute/dashboard',route=>route.fulfill({contentType:'application/json',body:JSON.stringify({url:'http://127.0.0.1:20128/dashboard'})}));
+    await page.evaluate(()=>{window.ForgeDesktop={openExternalUrl:async url=>{window.openedDashboard=url;}};});
+    await page.locator('#omniroute-dashboard').click();
+    await page.waitForFunction(()=>window.openedDashboard==='http://127.0.0.1:20128/dashboard');
     await page.route('**/api/omniroute/start',route=>route.fulfill({status:202,contentType:'application/json',body:JSON.stringify({phase:'installing'})}));
     await page.route('**/api/omniroute',route=>route.fulfill({contentType:'application/json',body:JSON.stringify({phase:'installing',running:false,installed:false})}));
     await page.locator('#omniroute-start').click();

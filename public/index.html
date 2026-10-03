@@ -269,8 +269,8 @@
         <div class="omniroute-setup" id="omniroute-setup" hidden>
           <div class="omniroute-heading"><span class="provider-preset-mark omni-mark">O</span><div><strong>Your local AI router</strong><small id="omniroute-status" role="status">Checking connection…</small></div></div>
           <p>Free, open source gateway with automatic routing and provider fallback. Forge installs it in its own local data folder. The initial download is large and may take a few minutes.</p>
-            <p>Connect free providers in its dashboard. The default coding and fast routes use the free model pool and stop when none are available. Connected accounts keep their own quotas; other route choices may be billable. Your ChatGPT sign-in stays in Forge.</p>
-          <div class="omniroute-actions"><button class="quiet-button" id="omniroute-start" type="button">Install &amp; start</button><a class="quiet-button" href="http://127.0.0.1:20128/dashboard" target="_blank" rel="noopener noreferrer">Open dashboard ↗</a></div>
+          <p>The default coding and fast routes use its free pool. If a route rejects Forge, automatic fallback uses your saved Kilo, OpenRouter, Groq, or NVIDIA connections. OpenRouter fallback requires zero-price models. Provider quotas and account billing still apply. Your ChatGPT sign-in stays in Forge.</p>
+          <div class="omniroute-actions"><button class="quiet-button" id="omniroute-start" type="button">Install &amp; start</button><a class="quiet-button" id="omniroute-dashboard" href="http://127.0.0.1:20128/dashboard" target="_blank" rel="noopener noreferrer">Open dashboard ↗</a></div>
         </div>
         <div class="provider-billing-note"><span class="provider-lock" aria-hidden="true">◇</span><span>API keys stay in your local Windows secure store. Requests to custom providers use their billing and terms; your ChatGPT login remains connected.</span></div>
         <div class="dialog-actions"><button class="quiet-button" data-close-modal="providers-modal" type="button">Done</button><button class="primary-button" id="provider-save" type="button">Add provider</button></div>

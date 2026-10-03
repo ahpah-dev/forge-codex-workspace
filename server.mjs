@@ -13,6 +13,7 @@ import { createFreeRouter, FREE_PROVIDER_ID, FREE_KEY_IDS, isCodexLimitError, ex
 import { bridgeResponses, createChatProviderRouter, providerApiFormat, providerBaseInstructions, GROQ_CODING_MODELS, isGroqProvider, KILO_FREE_BASE_URL, KILO_FREE_MODEL } from './responses-bridge.mjs';
 import { browserCodexConfig, browserCodexArgs, computerUseInstructions } from './browser-config.mjs';
 import { createOmniRouteManager, isLocalOmniRoute, OMNIROUTE_BASE_URL } from './omniroute-manager.mjs';
+import { createOmniRouteRouting, omniRouteFallbacks } from './omniroute-routing.mjs';
 import './public/question-protocol.js';
 import './public/plugin-protocol.js';
 import './public/file-paths.js';
@@ -598,7 +599,7 @@ class CodexAppServer {
       this.emit({ type: 'connection', connected: false, message: 'Codex connection closed.' });
     });
     await this.requestRaw('initialize', {
-      clientInfo: { name: 'forge_coding_workspace', title: 'Forge', version: process.env.FORGE_APP_VERSION || '1.0.41' },
+      clientInfo: { name: 'forge_coding_workspace', title: 'Forge', version: process.env.FORGE_APP_VERSION || '1.0.42' },
       capabilities: { experimentalApi: true },
     });
     this.notify('initialized', {});
@@ -765,6 +766,17 @@ const freeRouter = createFreeRouter({
     return keys[FREE_KEY_IDS[provider]] ? decryptProviderKey(keys[FREE_KEY_IDS[provider]]) : '';
   },
   onRoute(route) { publish({ type: 'notification', method: 'routing/model/selected', params: { route } }); },
+});
+
+const omniRouting = createOmniRouteRouting({
+  async getFallbacks() {
+    const keys = await readEncryptedProviderKeys(providerKeysPath);
+    return omniRouteFallbacks(settings.providers, id => Boolean(keys[id]), id => decryptProviderKey(keys[id]));
+  },
+  onRoute(route) {
+    const active = [...turnRequests.values()].filter(request => request.providerId === route.ownerProviderId);
+    publish({ type:'notification', method:'routing/model/selected', params:{ route, ...(active.length === 1 ? {threadId:active[0].threadId} : {}) } });
+  },
 });
 
 function freeRoutingStatus(keys) {
@@ -1261,6 +1273,7 @@ async function handleApi(req, res, url) {
         settings.freeRouting = { enabled, codexFallback: enabled && input.codexFallback === true };
         await saveSettings();
         freeRouter.reset();
+        omniRouting.reset();
         initialAppState = null;
         return json(res, 200, { freeRouting: freeRoutingStatus(keys), providers: publicProviders(keys) });
       }
@@ -1278,6 +1291,13 @@ async function handleApi(req, res, url) {
       if (route === '/api/omniroute/start') {
         omniRoute.installAndStart();
         return json(res, 202, await omniRoute.status());
+      }
+      if (route === '/api/omniroute/dashboard') {
+        const baseUrl = normalizeProviderBaseUrl(input.baseUrl || OMNIROUTE_BASE_URL);
+        if (!isLocalOmniRoute({nativePreset:'omniroute',baseUrl})) throw new Error('Use a local OmniRoute address.');
+        if (baseUrl === OMNIROUTE_BASE_URL && !(await omniRoute.status()).running) await omniRoute.start();
+        omniRouting.reset();
+        return json(res, 200, {url:new URL('/dashboard',baseUrl).href});
       }
       if (route === '/api/providers/discover') {
         const baseUrl = normalizeProviderBaseUrl(input.baseUrl);
@@ -1337,6 +1357,7 @@ async function handleApi(req, res, url) {
           ? settings.providers.map((item) => item.id === id ? provider : item)
           : [...settings.providers, provider];
         await saveSettings();
+        omniRouting.reset();
         return json(res, 200, { provider: { ...provider, authConfigured: true } });
       }
       if (route === '/api/providers/remove') {
@@ -1347,6 +1368,7 @@ async function handleApi(req, res, url) {
         await writeEncryptedProviderKeys(providerKeysPath, encryptedKeys);
         settings.providers = settings.providers.filter((provider) => provider.id !== id);
         await saveSettings();
+        omniRouting.reset();
         return json(res, 200, { providers: publicProviders(encryptedKeys) });
       }
       if (route === '/api/login/start') {
@@ -1549,12 +1571,12 @@ const httpServer = createServer(async (req, res) => {
         const keys = await readEncryptedProviderKeys(providerKeysPath);
         const key = keys[provider.id] ? await decryptProviderKey(keys[provider.id]) : '';
         if (!key && !isLocalOmniRoute(provider)) throw new Error(`Add your ${provider.name} API key in Settings.`);
-        if (isLocalOmniRoute(provider) && normalizeProviderBaseUrl(provider.baseUrl) === OMNIROUTE_BASE_URL) {
+        const normalizedProvider = { ...provider, baseUrl:normalizeProviderBaseUrl(provider.baseUrl) };
+        router = isLocalOmniRoute(normalizedProvider) ? omniRouting.forProvider({provider:normalizedProvider,model:input.model,key,ensureGateway:async()=>{
+          if (normalizedProvider.baseUrl !== OMNIROUTE_BASE_URL) return;
           const status = await omniRoute.status();
-          if (!status.running && status.installed) await omniRoute.start();
-          else if (!status.running) throw new Error('Install and start OmniRoute in Manage providers first.');
-        }
-        router = createChatProviderRouter({ provider: { ...provider, baseUrl: normalizeProviderBaseUrl(provider.baseUrl) }, model: input.model, key });
+          if (!status.running) await omniRoute.start();
+        }}) : createChatProviderRouter({ provider: normalizedProvider, model: input.model, key });
       }
       await bridgeResponses({ input, res, router, signal: AbortSignal.any([controller.signal, AbortSignal.timeout(600000)]) });
     } catch (error) {
