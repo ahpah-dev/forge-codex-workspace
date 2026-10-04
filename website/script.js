@@ -65,12 +65,12 @@ document.querySelectorAll('.faq details').forEach(details => {
 });
 
 // Keep direct downloads current; the shipped Windows link remains a fallback.
-fetch('https://api.github.com/repos/davidegeric-cloud/forge-codex-workspace/releases/latest', { signal: typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(5000) : undefined })
+fetch('https://api.github.com/repos/ahpah-dev/forge-codex-workspace/releases/latest', { signal: typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(5000) : undefined })
   .then(response => { if (!response.ok) throw new Error('Release lookup unavailable'); return response.json(); })
   .then(release => {
     const installer = release.assets?.find(asset => /^Forge-Setup-[\d.]+-x64\.exe$/.test(asset.name));
     const url = installer?.browser_download_url;
-    if (url && url.startsWith('https://github.com/davidegeric-cloud/forge-codex-workspace/releases/download/')) {
+    if (url && url.startsWith('https://github.com/ahpah-dev/forge-codex-workspace/releases/download/')) {
       document.querySelectorAll('.download-link').forEach(link => { link.href = url; });
       if (/^v\d+\.\d+\.\d+$/.test(release.tag_name || '')) document.querySelectorAll('.release-version').forEach(label => { label.textContent = release.tag_name; });
     }
