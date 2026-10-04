@@ -1,6 +1,7 @@
 (() => {
   'use strict';
   const storageKey = 'forge.appearance.v1';
+  if (window.ForgeDesktop?.titleBarOverlay) document.documentElement.classList.add('forge-native-titlebar');
   const colors = [
     ['page', '--page', 'Workspace', '#fafaf8'],
     ['sidebar', '--sidebar', 'Sidebar', '#f4f3f0'],
@@ -86,6 +87,9 @@
     root.dataset.composerHeight = settings.composerHeight ? 'manual' : 'auto';
     root.style.setProperty('--composer-height', `${settings.composerHeight || 110}px`);
     document.querySelector('meta[name="theme-color"]')?.setAttribute('content', settings.colors.page);
+    if (window.ForgeDesktop?.titleBarOverlay) {
+      window.ForgeDesktop.setTitleBarTheme(settings.colors.sidebar, settings.colors.ink).catch(() => {});
+    }
     window.dispatchEvent(new Event('forge:appearance'));
   }
   function save() {

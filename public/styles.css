@@ -40,6 +40,19 @@ button { -webkit-tap-highlight-color: transparent; }
 [hidden] { display: none !important; }
 
 .app-shell { --sidebar-track-width: var(--sidebar-open-width, var(--sidebar-width)); position: relative; display: grid; grid-template-columns: var(--sidebar-track-width) minmax(0, 1fr) 0; width: 100%; height: 100dvh; min-height: 520px; overflow: hidden; background: var(--page); transition: grid-template-columns .28s cubic-bezier(.22,.61,.36,1); }
+.forge-native-titlebar .app-shell { grid-template-rows: 40px minmax(0, 1fr); }
+.forge-window-titlebar { display: none; }
+.forge-native-titlebar .forge-window-titlebar { position: relative; z-index: 12; display: flex; grid-column: 1 / -1; grid-row: 1; align-items: center; min-width: 0; padding: 0 150px 0 17px; overflow: hidden; border-bottom: 1px solid var(--line); color: var(--ink); background: var(--sidebar); -webkit-app-region: drag; user-select: none; transition: background-color .18s ease, border-color .18s ease, color .18s ease; }
+.forge-titlebar-brand { display: flex; align-items: center; min-width: 0; height: 100%; gap: 9px; }
+.forge-titlebar-brand img { display: block; width: 23px; height: 23px; flex: 0 0 auto; padding: 3px; border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--line)); border-radius: 7px; background: var(--paper); object-fit: contain; }
+.forge-titlebar-name { color: var(--ink); font-size: 13px; font-weight: 650; letter-spacing: -.025em; }
+.forge-titlebar-divider { width: 1px; height: 15px; margin: 0 2px; background: var(--line-dark); }
+.forge-titlebar-caption { color: var(--muted); font-size: 9px; font-weight: 650; letter-spacing: .12em; }
+.forge-native-titlebar .sidebar { grid-column: 1; grid-row: 2; }
+.forge-native-titlebar .main-column { grid-column: 2; grid-row: 2; }
+.forge-native-titlebar .sidebar-resize-handle { top: 40px; }
+.forge-native-titlebar .window-chrome { height: 47px; padding-right: 18px; padding-left: 0; }
+.forge-native-titlebar .window-chrome .forge-brand { display: none; }
 .app-shell.sidebar-hidden { --sidebar-track-width: 0px; }
 .sidebar { z-index: 4; display: flex; flex-direction: column; min-width: 0; height: 100%; padding: 16px 15px 12px; overflow: hidden; background: var(--sidebar); border-right: 1px solid var(--line); transition: transform .28s cubic-bezier(.22,.61,.36,1), opacity .18s ease; }
 .sidebar-hidden .sidebar { transform: translateX(-14px); opacity: 0; pointer-events: none; }

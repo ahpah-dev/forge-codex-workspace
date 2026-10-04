@@ -39,6 +39,13 @@ ipcMain.handle('forge:choose-folder', async () => {
   return result.canceled ? null : result.filePaths[0] || null;
 });
 
+ipcMain.handle('forge:set-titlebar-theme', (event, { color, symbolColor } = {}) => {
+  if (process.platform !== 'win32' || event.sender !== mainWindow?.webContents) return false;
+  if (!/^#[\da-f]{6}$/i.test(color || '') || !/^#[\da-f]{6}$/i.test(symbolColor || '')) return false;
+  mainWindow.setTitleBarOverlay({ color, symbolColor, height: 40 });
+  return true;
+});
+
 ipcMain.handle('forge:connect-anthropic', async () => {
   const configured = process.env.CLAUDE_CLI;
   const localInstall = path.join(app.getPath('home'), '.local', 'bin', 'claude.exe');
@@ -200,6 +207,10 @@ function createMainWindow(url) {
     title: 'Forge',
     icon: iconPath,
     autoHideMenuBar: true,
+    ...(process.platform === 'win32' ? {
+      titleBarStyle: 'hidden',
+      titleBarOverlay: { color: '#f4f3f0', symbolColor: '#292d31', height: 40 },
+    } : {}),
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,

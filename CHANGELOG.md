@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.47
+
+- Add a theme-aware Windows title bar with native window controls and a polished Forge brand strip.
+
 ## 1.0.46
 
 - Drag images and other files onto the chat composer, or attach them with the file picker.

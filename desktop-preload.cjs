@@ -2,6 +2,8 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('ForgeDesktop', {
   chooseFolder: () => ipcRenderer.invoke('forge:choose-folder'),
+  titleBarOverlay: process.platform === 'win32',
+  setTitleBarTheme: (color, symbolColor) => ipcRenderer.invoke('forge:set-titlebar-theme', { color, symbolColor }),
   connectAnthropic: () => ipcRenderer.invoke('forge:connect-anthropic'),
   computerUse: true,
   browserCommand: (action, params) => ipcRenderer.invoke('forge:browser-command', { action, params }),
