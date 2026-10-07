@@ -6,17 +6,21 @@ Forge is a free, MIT-licensed desktop AI workspace for Codex, Claude Code, and e
 
 ## Screenshots
 
-Screenshots use a local demo project with generic account details.
+Screenshots show the v1.0.49 interface, using a demo project and generic task examples.
 
-![Forge workspace](docs/screenshots/forge-home.png)
+![Forge workspace](docs/screenshots/forge-home-v1.0.49.png)
+
+During coding, the composer becomes compact and stays at the bottom of the session:
+
+![Compact coding composer](docs/screenshots/forge-coding-v1.0.49.jpg)
 
 | Reasoning controls | Model selection |
 | --- | --- |
-| ![Block slider with effort descriptions](docs/screenshots/forge-reasoning.png) | ![Model search and tier icons](docs/screenshots/forge-models.png) |
+| ![Block slider with effort descriptions](docs/screenshots/forge-reasoning-v1.0.49.jpg) | ![Model search and tier icons](docs/screenshots/forge-models-v1.0.49.jpg) |
 
 | Working tree diffs | Assigning a subagent |
 | --- | --- |
-| ![File changes with line totals and diff preview](docs/screenshots/forge-changes.png) | ![Assign a named subagent with a role and task scope](docs/screenshots/forge-assign-agent.png) |
+| ![File changes with line totals and diff preview](docs/screenshots/forge-changes-v1.0.49.jpg) | ![Assign a named subagent with a role and task scope](docs/screenshots/forge-assign-agent-v1.0.49.jpg) |
 
 ## Windows app
 
