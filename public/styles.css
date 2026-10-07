@@ -16,11 +16,11 @@
   color-scheme: light;
   --sidebar-width: 248px;
   --context-width: 330px;
-  --page: #fafaf8; --sidebar: #f4f3f0; --paper: #ffffff; --field: #ffffff;
-  --ink: #292d31; --muted: #747872; --soft: var(--muted);
-  --line: #e0e2dd; --line-dark: color-mix(in srgb, var(--line) 85%, var(--ink));
-  --accent: #b56c52; --accent-soft: color-mix(in srgb, var(--accent) 12%, var(--paper));
-  --on-accent: #ffffff; --hover: #eeede9; --user-bg: #f0efeb; --code-bg: #f4f5f2;
+  --page: #faf9f5; --sidebar: #f0eee8; --paper: #ffffff; --field: #ffffff;
+  --ink: #2b2925; --muted: #807b70; --soft: var(--muted);
+  --line: #dfdcd3; --line-dark: color-mix(in srgb, var(--line) 85%, var(--ink));
+  --accent: #b97155; --accent-soft: color-mix(in srgb, var(--accent) 12%, var(--paper));
+  --on-accent: #ffffff; --hover: #e8e5dc; --user-bg: #f0eee6; --code-bg: #f2f0e9;
   --brand: #5d6ec1; --success: #578663; --green: var(--success); --danger: #b75650;
   --astra: #8671be; --sol: #bb862d; --luna: #647cbd; --provider: #8467b3; --nvidia: #719346;
   --shadow-color: #101722;

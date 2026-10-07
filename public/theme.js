@@ -3,17 +3,17 @@
   const storageKey = 'forge.appearance.v1';
   if (window.ForgeDesktop?.titleBarOverlay) document.documentElement.classList.add('forge-native-titlebar');
   const colors = [
-    ['page', '--page', 'Workspace', '#fafaf8'],
-    ['sidebar', '--sidebar', 'Sidebar', '#f4f3f0'],
+    ['page', '--page', 'Workspace', '#faf9f5'],
+    ['sidebar', '--sidebar', 'Sidebar', '#f0eee8'],
     ['paper', '--paper', 'Panels & cards', '#ffffff'],
     ['field', '--field', 'Input fields', '#ffffff'],
-    ['ink', '--ink', 'Primary text', '#292d31'],
-    ['muted', '--muted', 'Secondary text', '#747872'],
-    ['line', '--line', 'Borders', '#e0e2dd'],
-    ['accent', '--accent', 'Accent', '#b56c52'],
-    ['hover', '--hover', 'Hover & selection', '#eeede9'],
-    ['user', '--user-bg', 'Your messages', '#f0efeb'],
-    ['code', '--code-bg', 'Code blocks', '#f4f5f2'],
+    ['ink', '--ink', 'Primary text', '#2b2925'],
+    ['muted', '--muted', 'Secondary text', '#807b70'],
+    ['line', '--line', 'Borders', '#dfdcd3'],
+    ['accent', '--accent', 'Accent', '#b97155'],
+    ['hover', '--hover', 'Hover & selection', '#e8e5dc'],
+    ['user', '--user-bg', 'Your messages', '#f0eee6'],
+    ['code', '--code-bg', 'Code blocks', '#f2f0e9'],
     ['onAccent', '--on-accent', 'Button text', '#ffffff'],
     ['brand', '--brand', 'GPT mark', '#5d6ec1'],
     ['success', '--success', 'Success', '#578663'],
@@ -78,6 +78,9 @@
     root.style.setProperty('--code-size', `${settings.codeSize}px`);
     root.style.setProperty('--chat-line-height', settings.lineHeight);
     for (const [slot] of fontSlots) root.style.setProperty(`--font-${slot}`, family(slot));
+    // Custom interface fonts also apply to the welcome and session headings.
+    if (settings.fonts.ui === 'Anthropic Sans') root.style.removeProperty('--font-editorial');
+    else root.style.setProperty('--font-editorial', family('ui'));
     const rgb = settings.colors.page.match(/[a-f0-9]{2}/gi).map((part) => parseInt(part, 16));
     const dark = (rgb[0] * .2126 + rgb[1] * .7152 + rgb[2] * .0722) < 128;
     root.style.colorScheme = dark ? 'dark' : 'light';

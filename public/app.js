@@ -283,14 +283,14 @@ async function setBrowserMode(active) {
       panel.hidden = true;
       column.classList.remove('browser-mode', 'browser-closing', 'browser-expanded');
       clearBrowserCloseAnimation();
-      requestAnimationFrame(() => { updateBrowserLayout(); positionWelcomeSuggestions(); });
+      requestAnimationFrame(updateBrowserLayout);
     }, 280);
     return;
   }
   column.classList.toggle('browser-mode', state.browser.active);
   column.classList.toggle('browser-expanded', state.browser.active && state.browser.expanded);
   panel.hidden = !state.browser.active;
-  requestAnimationFrame(() => { updateBrowserLayout(); positionWelcomeSuggestions(); });
+  requestAnimationFrame(updateBrowserLayout);
 }
 
 async function runBrowserCommand(action, params = {}) {
@@ -909,11 +909,11 @@ function renderWorkspace() {
   $('#open-project-panel').hidden = open;
   $('#empty-workspace-note').hidden = open;
   if (open && !state.threadId && !state.messages.length) {
-    $('#welcome-title').textContent = 'What would you like to change?';
-    $('#welcome-copy').textContent = 'Choose a starting point or describe the next step.';
+    $('#welcome-title').textContent = 'What will you build next?';
+    $('#welcome-copy').textContent = 'Explore an idea, make a change, or start something new.';
   } else if (!open) {
-    $('#welcome-title').textContent = 'Build something useful.';
-    $('#welcome-copy').textContent = 'Open a project, then tell Codex what you want to change.';
+    $('#welcome-title').textContent = 'What will you make today?';
+    $('#welcome-copy').textContent = 'A little curiosity. A place to build.';
   }
   const list = $('#recent-workspaces');
   list.replaceChildren();
@@ -1425,6 +1425,7 @@ function renderSurface() {
   $('.workspace-surface').classList.toggle('has-conversation', active);
   const enteringConversation = active && $('#conversation-view').hidden;
   $('#welcome-view').hidden = active;
+  $('#welcome-footer').hidden = active;
   $('#conversation-view').hidden = !active;
   if (wasConversation !== active) resizeComposer();
   if (active) {
@@ -4595,17 +4596,6 @@ function movePluginMentionSelection(delta) {
   return true;
 }
 
-function positionWelcomeSuggestions() {
-  const surface = $('.workspace-surface');
-  if (surface.classList.contains('has-conversation')) return;
-  const dock = $('#composer-dock');
-  const surfaceRect = surface.getBoundingClientRect();
-  const dockRect = dock.getBoundingClientRect();
-  const dockBottom = dockRect.bottom - surfaceRect.top;
-  $('.idea-divider').style.top = `${Math.ceil(dockBottom + 12)}px`;
-  $('.idea-grid').style.top = `${Math.ceil(dockBottom + 38)}px`;
-}
-
 function setContextTab(tab, { toggle = false } = {}) {
   if (!['files', 'changes', 'agents', 'plugins'].includes(tab)) return;
   const shell = $('.app-shell');
@@ -4852,11 +4842,6 @@ composerGrip.addEventListener('keydown', (event) => {
     window.ForgeTheme.setComposerHeight(height + (event.key === 'ArrowUp' ? 12 : -12));
   }
 });
-const welcomeSuggestionResizeObserver = new ResizeObserver(() => requestAnimationFrame(positionWelcomeSuggestions));
-welcomeSuggestionResizeObserver.observe($('#composer-dock'));
-window.addEventListener('resize', () => requestAnimationFrame(positionWelcomeSuggestions));
-document.addEventListener('fullscreenchange', () => requestAnimationFrame(positionWelcomeSuggestions));
-positionWelcomeSuggestions();
 resizeComposer();
 $('#prompt-input').addEventListener('paste', (event) => {
   const images = [...(event.clipboardData?.items || [])]
@@ -5033,7 +5018,7 @@ function setMode(mode) {
   $('#mode-chat').setAttribute('aria-selected', String(mode === 'chat'));
   $('#mode-code').setAttribute('aria-selected', String(mode === 'code'));
   document.documentElement.classList.toggle('chat-mode', mode === 'chat');
-  $('#prompt-input').placeholder = mode === 'chat' ? 'Ask about this project…' : 'Find a small todo in the codebase and do it';
+  $('#prompt-input').placeholder = mode === 'chat' ? 'What would you like to explore?' : 'How can I help you build?';
   $('#access-select').value = mode === 'chat' ? 'read' : state.preferredAccess;
   syncAskModeButton();
   if (mode === 'chat') $('.app-shell').classList.add('context-hidden');

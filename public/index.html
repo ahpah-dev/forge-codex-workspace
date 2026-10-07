@@ -16,6 +16,7 @@
     <link rel="stylesheet" href="/polish.css">
     <link rel="stylesheet" href="/plugins.css">
     <link rel="stylesheet" href="/computer-use.css">
+    <link rel="stylesheet" href="/studio.css">
     <script src="/question-protocol.js" defer></script>
     <script src="/plugin-protocol.js" defer></script>
     <script src="/file-paths.js" defer></script>
@@ -115,21 +116,7 @@
 
         <div class="workspace-surface" id="workspace-surface">
           <section class="welcome-view" id="welcome-view">
-            <div class="welcome-hero"><span class="welcome-mark" aria-hidden="true"></span><div class="welcome-copy-block"><h1 id="welcome-title">Build something useful.</h1><p id="welcome-copy">Open a project, then tell Codex what you want to change.</p></div></div>
-
-            <div class="open-project-panel" id="open-project-panel">
-              <input id="workspace-path" type="hidden">
-              <button class="path-open-button" id="open-project-submit" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 6.5h6l2 2H20a1.5 1.5 0 0 1 1.5 1.5v7.8a1.7 1.7 0 0 1-1.7 1.7H4.2a1.7 1.7 0 0 1-1.7-1.7V8.2a1.7 1.7 0 0 1 1-1.7Z"/></svg><span>Select folder</span></button>
-              <label class="environment-select" title="Choose local access mode"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="1.5"/><path d="M8 21h8m-4-4v4"/></svg><span class="environment-label">Local</span><select id="access-select" aria-label="Local access mode"><option value="write">Local</option><option value="read">Local · Read only</option><option value="plan">Local · Planning</option></select><span class="select-chevron" aria-hidden="true">⌄</span></label>
-            </div>
-
-            <div class="idea-divider" id="idea-divider"><span>START WITH AN IDEA</span></div>
-            <div class="idea-grid" id="idea-grid">
-              <button class="idea-card" data-prompt="Explore this codebase and explain its main parts, entry points, and how they fit together." type="button"><span><small>GET ORIENTED</small>Understand this project</span></button>
-              <button class="idea-card" data-prompt="Find one useful TODO comment in this codebase, inspect its context, and implement a focused fix." type="button"><span><small>MAKE A SMALL FIX</small>Pick up a TODO</span></button>
-              <button class="idea-card" data-prompt="Review this project and recommend the most useful areas to improve its tests. Make no changes until I approve a specific suggestion." type="button"><span><small>QUALITY PASS</small>Improve test coverage</span></button>
-            </div>
-            <div class="empty-workspace-note" id="empty-workspace-note"><span class="note-icon">✦</span><span>Works locally with the Codex access and limits on your signed-in plan.</span></div>
+            <div class="welcome-hero"><span class="welcome-mark" aria-hidden="true"></span><div class="welcome-copy-block"><h1 id="welcome-title">What will you make today?</h1><p id="welcome-copy">A little curiosity. A place to build.</p></div></div>
           </section>
 
           <section class="conversation-view" id="conversation-view" hidden>
@@ -142,7 +129,7 @@
               <div class="composer-drop-overlay" id="composer-drop-overlay" role="status" aria-live="polite" hidden><span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m-5 5 5-5 5 5M4 15v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4"/></svg>Drop files to attach</span></div>
               <div class="message-edit-banner" id="message-edit-banner" hidden><span>Editing a previous message · sending creates a branch</span><button type="button" id="cancel-message-edit" aria-label="Cancel editing">Cancel</button></div>
               <div class="image-attachment-tray" id="image-attachment-tray" aria-label="Attachments" hidden></div>
-              <textarea id="prompt-input" rows="3" placeholder="Find a small todo in the codebase and do it" aria-label="Message Codex" aria-autocomplete="list" aria-controls="plugin-mention-menu" aria-expanded="false"></textarea>
+              <textarea id="prompt-input" rows="3" placeholder="How can I help you build?" aria-label="Message Codex" aria-autocomplete="list" aria-controls="plugin-mention-menu" aria-expanded="false"></textarea>
               <div class="plugin-mention-menu" id="plugin-mention-menu" role="listbox" aria-label="Installed Codex plugins" hidden><div class="plugin-mention-heading">Mention a plugin</div><div class="plugin-mention-options" id="plugin-mention-options"></div></div>
               <input id="image-input" type="file" multiple hidden>
               <div class="composer-bottom">
@@ -179,6 +166,20 @@
             <div class="planning-note" id="planning-note" hidden><span><strong>Planning mode</strong><small>Explore the project and shape a plan. File edits are disabled.</small></span><button class="quiet-button" id="plan-build" type="button">Switch to Code</button></div>
             <div class="composer-caption"><span class="shield-icon" aria-hidden="true">◇</span><span>Codex uses your selected folder. It asks before actions that need more permission.</span></div>
           </div>
+          <section class="welcome-footer" id="welcome-footer" aria-label="Get started">
+            <div class="open-project-panel" id="open-project-panel">
+              <input id="workspace-path" type="hidden">
+              <button class="path-open-button" id="open-project-submit" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 6.5h6l2 2H20a1.5 1.5 0 0 1 1.5 1.5v7.8a1.7 1.7 0 0 1-1.7 1.7H4.2a1.7 1.7 0 0 1-1.7-1.7V8.2a1.7 1.7 0 0 1 1-1.7Z"/></svg><span>Select folder</span></button>
+              <label class="environment-select" title="Choose local access mode"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="1.5"/><path d="M8 21h8m-4-4v4"/></svg><span class="environment-label">Local</span><select id="access-select" aria-label="Local access mode"><option value="write">Local</option><option value="read">Local · Read only</option><option value="plan">Local · Planning</option></select><span class="select-chevron" aria-hidden="true">⌄</span></label>
+            </div>
+            <div class="idea-divider" id="idea-divider"><span>A place to start</span></div>
+            <div class="idea-grid" id="idea-grid">
+              <button class="idea-card" data-prompt="Explore this codebase and explain its main parts, entry points, and how they fit together." type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 6 6-2 6 2 6-2v14l-6 2-6-2-6 2V6Zm6-2v14m6-12v14"/></svg><span><small>Explore</small>Understand this project</span></button>
+              <button class="idea-card" data-prompt="Find one useful TODO comment in this codebase, inspect its context, and implement a focused fix." type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 5a5 5 0 0 0-6 6L3 16l5 5 5-5a5 5 0 0 0 6-6l-4 3-4-4 3-4Z"/></svg><span><small>Build</small>Pick up a TODO</span></button>
+              <button class="idea-card" data-prompt="Review this project and recommend the most useful areas to improve its tests. Make no changes until I approve a specific suggestion." type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 4 6v6c0 5 8 9 8 9s8-4 8-9V6l-8-3Zm-4 9 3 3 5-6"/></svg><span><small>Refine</small>Improve test coverage</span></button>
+            </div>
+            <div class="empty-workspace-note" id="empty-workspace-note">Your workspace, your models, your flow.</div>
+          </section>
         </div>
       </main>
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.48
+
+- Refine the workspace with warm ivory colors, serif welcome and session headings, quieter navigation, and compact model controls inspired by Claude's interface.
+- Replace absolute welcome-screen positioning with a flowing layout so resizing the chatbox and adding attachments keeps starter cards below the composer.
+- Polish starter cards, project controls, and conversation surfaces while preserving dark themes, custom colors and fonts, and rounded, pill, and square chatboxes.
+- Keep starter cards visible in smaller windows and position the desktop context panel beneath the native title bar.
+
 ## 1.0.47
 
 - Add a theme-aware Windows title bar with native window controls and a polished Forge brand strip.
