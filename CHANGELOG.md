@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.49
+
+- Restructure the interface with a Claude-inspired sidebar, warm surfaces, serif welcome heading, and quieter navigation.
+- Give first messages a larger centered composer and coding sessions a compact bottom composer with project and work-mode context.
+- Remember resized heights separately for first messages and follow-ups, preserving existing home height preferences.
+- Move model selection beside Send and put reasoning and usage beneath the composer. Replace Send with Stop while a task runs.
+- Add sidebar search and project navigation. Ctrl+K searches sessions; Ctrl+Shift+K starts a new session.
+- Preserve custom themes, fonts, and rounded, pill, and square composer shapes across both layouts.
+
 ## 1.0.48
 
 - Refine the workspace with warm ivory colors, serif welcome and session headings, quieter navigation, and compact model controls inspired by Claude's interface.

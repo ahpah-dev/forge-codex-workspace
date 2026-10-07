@@ -909,10 +909,10 @@ function renderWorkspace() {
   $('#open-project-panel').hidden = open;
   $('#empty-workspace-note').hidden = open;
   if (open && !state.threadId && !state.messages.length) {
-    $('#welcome-title').textContent = 'What will you build next?';
+    $('#welcome-title').textContent = 'Let’s build something.';
     $('#welcome-copy').textContent = 'Explore an idea, make a change, or start something new.';
   } else if (!open) {
-    $('#welcome-title').textContent = 'What will you make today?';
+    $('#welcome-title').textContent = 'What can I help you build?';
     $('#welcome-copy').textContent = 'A little curiosity. A place to build.';
   }
   const list = $('#recent-workspaces');
@@ -1427,6 +1427,7 @@ function renderSurface() {
   $('#welcome-view').hidden = active;
   $('#welcome-footer').hidden = active;
   $('#conversation-view').hidden = !active;
+  syncComposerPresentation();
   if (wasConversation !== active) resizeComposer();
   if (active) {
     $('#conversation-title').textContent = state.threadName || (state.messages.find((message) => message.role === 'user')?.text.slice(0, 72) || 'Image request');
@@ -4140,10 +4141,26 @@ function updateComposerState() {
   const selectedModel = state.models.find((model) => model.id === state.modelId);
   const canUseSelectedProvider = Boolean(selectedModel?.providerId || state.account?.connected);
   $('#send-button').disabled = !state.workspace || !canUseSelectedProvider || state.isBusy || state.threadLoading;
+  $('#send-button').hidden = state.isBusy;
   $('#attach-image').disabled = !state.workspace || state.threadLoading;
   $('#stop-turn').hidden = !state.isBusy;
   $('#prompt-input').disabled = state.threadLoading;
   $('#plan-build').disabled = state.isBusy || state.threadLoading;
+}
+
+function syncComposerPresentation() {
+  const active = $('.workspace-surface').classList.contains('has-conversation');
+  const textarea = $('#prompt-input');
+  const access = $('#access-select').value;
+  $('#composer-dock').dataset.stage = active ? 'follow-up' : 'start';
+  window.ForgeTheme?.setComposerStage(active ? 'follow-up' : 'start');
+  textarea.rows = active ? 1 : 3;
+  textarea.placeholder = state.mode === 'chat'
+    ? (active ? 'Reply to Forge…' : 'How can Forge help you today?')
+    : (active ? 'Describe the next change…' : 'What would you like to build?');
+  $('#composer-project-name').textContent = state.workspace?.name || 'Local workspace';
+  $('#composer-project-name').title = state.workspace?.path || '';
+  $('#composer-stage-label').textContent = access === 'plan' ? 'Planning' : access === 'read' ? 'Ask session' : 'Code session';
 }
 
 function resizeComposer() {
@@ -4714,6 +4731,19 @@ $('#workspace-card').addEventListener('click', chooseWorkspaceFolder);
 $('#settings-button').setAttribute('aria-label', 'Settings');
 $('#settings-button').title = 'Settings';
 $('#settings-button').addEventListener('click', () => window.ForgeTheme.open());
+$('#sidebar-open-project').addEventListener('click', chooseWorkspaceFolder);
+function focusSessionSearch() {
+  if ($('#session-filter-wrap').hidden) $('#filter-sessions').click();
+  $('#session-filter').focus();
+}
+$('#sidebar-find-session').addEventListener('click', focusSessionSearch);
+document.addEventListener('keydown', (event) => {
+  if ((event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === 'k' && !$('.modal-backdrop:not([hidden])')) {
+    event.preventDefault();
+    if ($('.app-shell').classList.contains('sidebar-hidden')) setSidebarHidden(false);
+    focusSessionSearch();
+  }
+});
 $('#external-approval-requests').addEventListener('change', saveExternalApprovalSetting);
 $('#routing-save').addEventListener('click', saveFreeRouting);
 $('#routing-discover').addEventListener('click', discoverFreeRouting);
@@ -4947,6 +4977,7 @@ function syncAskModeButton() {
   $('#ask-mode').setAttribute('aria-label', `${label} mode; change work mode`);
   $('#ask-mode').classList.toggle('is-planning', access === 'plan');
   $('#planning-note').hidden = access !== 'plan';
+  syncComposerPresentation();
   for (const option of $$('#ask-mode-menu [data-access-mode]')) {
     const selected = option.dataset.accessMode === access;
     option.setAttribute('aria-checked', String(selected));
@@ -5018,7 +5049,6 @@ function setMode(mode) {
   $('#mode-chat').setAttribute('aria-selected', String(mode === 'chat'));
   $('#mode-code').setAttribute('aria-selected', String(mode === 'code'));
   document.documentElement.classList.toggle('chat-mode', mode === 'chat');
-  $('#prompt-input').placeholder = mode === 'chat' ? 'What would you like to explore?' : 'How can I help you build?';
   $('#access-select').value = mode === 'chat' ? 'read' : state.preferredAccess;
   syncAskModeButton();
   if (mode === 'chat') $('.app-shell').classList.add('context-hidden');
@@ -5251,7 +5281,7 @@ new ResizeObserver(positionModelPickerMenu).observe($('#model-picker-trigger'));
 window.addEventListener('keydown', (event) => {
   const modifier = event.ctrlKey || event.metaKey;
   if (modifier && event.key.toLowerCase() === 'o') { event.preventDefault(); openWorkspaceDialog(); }
-  if (modifier && event.key.toLowerCase() === 'k') { event.preventDefault(); newTask(); }
+  if (modifier && event.shiftKey && event.key.toLowerCase() === 'k' && !$('.modal-backdrop:not([hidden])')) { event.preventDefault(); newTask(); }
   if (event.key === 'Escape') for (const modal of $$('.modal-backdrop')) if (!modal.hidden) setModal(modal.id, false);
 });
 
@@ -5259,7 +5289,7 @@ connectEvents();
 if (!/Mac/i.test(navigator.userAgentData?.platform || navigator.platform || '')) {
   const newTaskShortcut = $('.new-task-button kbd');
   const openFolderShortcut = $('.kbd-hint');
-  if (newTaskShortcut) newTaskShortcut.textContent = 'Ctrl K';
+  if (newTaskShortcut) newTaskShortcut.textContent = 'Ctrl Shift K';
   if (openFolderShortcut) openFolderShortcut.textContent = 'Ctrl O';
 }
 if (window.matchMedia('(max-width: 980px)').matches) $('.app-shell').classList.add('context-hidden');

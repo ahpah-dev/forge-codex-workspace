@@ -31,11 +31,12 @@
     graphite: { name: 'Graphite', colors: { ...baseColors, page: '#1c1f22', sidebar: '#151719', paper: '#25282b', field: '#1e2124', hover: '#303438', user: '#2b2f33', code: '#171a1d', ink: '#f0f1f2', muted: '#a6aaad', line: '#3a4045', accent: '#e09a78', onAccent: '#241912', brand: '#b4b8ec', success: '#91c7a0', danger: '#ee938a', astra: '#c7a3ea', sol: '#ebc27b', luna: '#b0c2ef', provider: '#c6a5e6', nvidia: '#afd080' } },
     midnight: { name: 'Midnight', colors: { ...baseColors, page: '#0d1220', sidebar: '#090e19', paper: '#151d2d', field: '#111929', hover: '#212d43', user: '#1a2840', code: '#0a1322', ink: '#eef2ff', muted: '#a1b0ca', line: '#293750', accent: '#aaa1ff', onAccent: '#17152b', brand: '#aaa1ff', success: '#83d5bc', danger: '#ffa0a0', astra: '#d0b5ff', sol: '#f0c878', luna: '#abcaff', provider: '#cfb5ff', nvidia: '#aada8b' } },
   };
-  const defaults = { version: 1, preset: 'linen', colors: { ...baseColors }, fonts: { ui: 'Anthropic Sans', chat: 'Anthropic Sans', code: 'Consolas' }, customFonts: { ui: '', chat: '', code: '' }, uiScale: 100, chatSize: 15, codeSize: 12, lineHeight: 1.7, pattern: 'none', composerShape: 'rounded', composerHeight: 0 };
+  const defaults = { version: 1, preset: 'linen', colors: { ...baseColors }, fonts: { ui: 'Anthropic Sans', chat: 'Anthropic Sans', code: 'Consolas' }, customFonts: { ui: '', chat: '', code: '' }, uiScale: 100, chatSize: 15, codeSize: 12, lineHeight: 1.7, pattern: 'none', composerShape: 'rounded', composerHeight: 0, composerHeights: { start: 0, 'follow-up': 0 } };
   const fontChoices = ['system', 'Anthropic Sans', 'Segoe UI', 'Arial', 'Calibri', 'Verdana', 'Trebuchet MS', 'Georgia', 'Cambria', 'Times New Roman', 'Consolas', 'Cascadia Code', 'Courier New', 'custom', 'uploaded'];
   const fontSlots = [['ui', 'Interface font'], ['chat', 'Conversation font'], ['code', 'Code & terminal font']];
   const uploadedFonts = new Map();
   let settings = normalize(readSaved());
+  let composerStage = 'start';
   let lastFocus = null;
 
   function readSaved() { try { return JSON.parse(localStorage.getItem(storageKey) || 'null'); } catch { return null; } }
@@ -55,7 +56,29 @@
     if (['none', 'dots', 'grid'].includes(input.pattern)) result.pattern = input.pattern;
     if (['rounded', 'pill', 'square'].includes(input.composerShape)) result.composerShape = input.composerShape;
     if (Number.isFinite(Number(input.composerHeight)) && Number(input.composerHeight) > 0) result.composerHeight = Math.max(64, Math.min(360, Number(input.composerHeight)));
+    // Preserve the old height for the home composer; follow-ups start compact.
+    result.composerHeights = { start: result.composerHeight, 'follow-up': 0 };
+    for (const stage of ['start', 'follow-up']) {
+      const height = input.composerHeights?.[stage];
+      if (typeof height === 'number' && Number.isFinite(height)) {
+        result.composerHeights[stage] = height <= 0 ? 0 : Math.max(64, Math.min(360, height));
+      }
+    }
     return result;
+  }
+  function getComposerHeight() { return settings.composerHeights?.[composerStage] || 0; }
+  function applyComposerHeight() {
+    const height = getComposerHeight();
+    document.documentElement.dataset.composerHeight = height ? 'manual' : 'auto';
+    document.documentElement.style.setProperty('--composer-height', `${height || 110}px`);
+  }
+  function setComposerHeight(height) {
+    if (!Number.isFinite(height)) return;
+    settings.composerHeights ||= { start: 0, 'follow-up': 0 };
+    settings.composerHeights[composerStage] = height <= 0 ? 0 : Math.max(64, Math.min(360, height));
+    settings.composerHeight = settings.composerHeights.start;
+    save();
+    syncComposerControls();
   }
   function family(slot) {
     const selected = settings.fonts[slot];
@@ -87,8 +110,7 @@
     root.dataset.themeScheme = dark ? 'dark' : 'light';
     root.dataset.canvas = settings.pattern;
     root.dataset.composerShape = settings.composerShape;
-    root.dataset.composerHeight = settings.composerHeight ? 'manual' : 'auto';
-    root.style.setProperty('--composer-height', `${settings.composerHeight || 110}px`);
+    applyComposerHeight();
     document.querySelector('meta[name="theme-color"]')?.setAttribute('content', settings.colors.page);
     if (window.ForgeDesktop?.titleBarOverlay) {
       window.ForgeDesktop.setTitleBarTheme(settings.colors.sidebar, settings.colors.ink).catch(() => {});
@@ -187,8 +209,8 @@
     }
     document.getElementById('theme-pattern').addEventListener('change', (event) => { settings.pattern = event.target.value; save(); });
     document.getElementById('composer-shape').addEventListener('change', (event) => { settings.composerShape = event.target.value; save(); });
-    document.getElementById('composer-height').addEventListener('input', (event) => { settings.composerHeight = Number(event.target.value); save(); syncComposerControls(); });
-    document.getElementById('composer-height-auto').addEventListener('click', () => { settings.composerHeight = 0; save(); syncComposerControls(); });
+    document.getElementById('composer-height').addEventListener('input', (event) => setComposerHeight(Number(event.target.value)));
+    document.getElementById('composer-height-auto').addEventListener('click', () => setComposerHeight(0));
     syncControls();
   }
   function syncControls() {
@@ -213,9 +235,11 @@
     const shape = document.getElementById('composer-shape');
     if (!shape) return;
     shape.value = settings.composerShape;
-    document.getElementById('composer-height').value = settings.composerHeight || 110;
-    document.getElementById('composer-height-value').value = settings.composerHeight ? `${Math.round(settings.composerHeight)}px` : 'Automatic';
-    document.getElementById('composer-height-auto').setAttribute('aria-pressed', String(!settings.composerHeight));
+    const height = getComposerHeight();
+    document.getElementById('composer-height').value = height || 110;
+    document.getElementById('composer-height-value').value = height ? `${Math.round(height)}px` : 'Automatic';
+    document.getElementById('composer-height-auto').setAttribute('aria-pressed', String(!height));
+    document.getElementById('composer-height-caption').textContent = composerStage === 'start' ? 'First message height' : 'Follow-up height';
   }
   function fontDatabase() {
     return new Promise((resolve, reject) => {
@@ -246,8 +270,15 @@
   function close() { document.getElementById('settings-modal').hidden = true; lastFocus?.focus({ preventScroll: true }); }
   window.ForgeTheme = {
     open() { lastFocus = document.activeElement; syncControls(); document.getElementById('settings-modal').hidden = false; document.getElementById('appearance-close').focus(); },
-    getComposerHeight() { return settings.composerHeight; },
-    setComposerHeight(height) { settings.composerHeight = height === 0 ? 0 : Math.max(64, Math.min(360, height)); save(); syncComposerControls(); },
+    getComposerHeight,
+    setComposerHeight,
+    setComposerStage(stage) {
+      const next = stage === 'follow-up' ? 'follow-up' : 'start';
+      if (next === composerStage) return;
+      composerStage = next;
+      applyComposerHeight();
+      syncComposerControls();
+    },
   };
   apply();
   document.addEventListener('DOMContentLoaded', () => {

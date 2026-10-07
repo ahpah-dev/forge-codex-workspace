@@ -39,26 +39,29 @@
           <button class="icon-button sidebar-collapse" id="sidebar-collapse" type="button" aria-label="Hide sidebar" title="Hide sidebar" aria-expanded="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5A1.5 1.5 0 0 1 5.5 4h13A1.5 1.5 0 0 1 20 5.5v13a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 18.5zM9 4v16m6-10-3 2 3 2"/></svg></button>
         </div>
 
+        <button class="new-task-button" id="new-task" type="button" title="New session · Ctrl+Shift+K"><svg class="new-session-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span>New session</span></button>
+
+        <nav class="sidebar-navigation" aria-label="Workspace navigation"><button class="sidebar-navigation-button" id="sidebar-find-session" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4.5 4.5"/></svg><span>Search sessions</span><kbd>Ctrl K</kbd></button><button class="sidebar-navigation-button" id="sidebar-open-project" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h6l2 2h10v11H3V6Z"/></svg><span>Open project</span></button></nav>
+
         <div class="mode-switch" role="tablist" aria-label="Workspace mode">
           <button id="mode-chat" type="button" role="tab" aria-selected="false">Chat</button>
           <button id="mode-code" type="button" role="tab" aria-selected="true">Code</button>
         </div>
 
-        <button class="new-task-button" id="new-task" type="button"><span class="plus-icon" aria-hidden="true">+</span><span>New session</span></button>
-
         <section class="sidebar-section workspace-section" aria-label="Current folder">
-          <div class="section-heading"><span>Folder</span><button class="tiny-icon-button" id="open-workspace" type="button" aria-label="Add folder" title="Add folder">+</button></div>
+          <div class="section-heading"><span>Projects</span><button class="tiny-icon-button" id="open-workspace" type="button" aria-label="Add folder" title="Add folder">+</button></div>
           <button class="workspace-card" id="workspace-card" type="button"><span class="folder-glyph" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3.5 6.5h6l2 2H20a1.5 1.5 0 0 1 1.5 1.5v7.8a1.7 1.7 0 0 1-1.7 1.7H4.2a1.7 1.7 0 0 1-1.7-1.7V8.2a1.7 1.7 0 0 1 1-1.7Z"/></svg></span><span class="workspace-card-copy"><strong id="workspace-name">Choose a folder</strong><small id="workspace-short-path">Open a local project</small></span><span class="chevron" aria-hidden="true">⌄</span></button>
           <div class="recent-workspaces" id="recent-workspaces"></div>
         </section>
 
         <section class="sidebar-section sessions-section" aria-label="Sessions">
-          <div class="section-heading"><span>Sessions</span><div class="session-tools"><button class="tiny-icon-button" id="filter-sessions" type="button" aria-label="Filter sessions" aria-expanded="false" title="Filter sessions"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M7 11h10m-7 5h4"/></svg></button><button class="tiny-icon-button refresh-sessions" id="refresh-sessions" type="button" aria-label="Refresh sessions" title="Refresh sessions"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5M6 9a7 7 0 0 1 12-2l2 2M4 13l2 2a7 7 0 0 0 12-2"/></svg></button></div></div>
+          <div class="section-heading"><span>Recents</span><div class="session-tools"><button class="tiny-icon-button" id="filter-sessions" type="button" aria-label="Filter sessions" aria-expanded="false" title="Filter sessions"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M7 11h10m-7 5h4"/></svg></button><button class="tiny-icon-button refresh-sessions" id="refresh-sessions" type="button" aria-label="Refresh sessions" title="Refresh sessions"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5M6 9a7 7 0 0 1 12-2l2 2M4 13l2 2a7 7 0 0 0 12-2"/></svg></button></div></div>
           <label class="session-filter-wrap" id="session-filter-wrap" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.3"/><path d="m16 16 4.5 4.5"/></svg><input id="session-filter" type="search" placeholder="Filter sessions" autocomplete="off"></label>
           <div class="session-list" id="session-list"><div class="sidebar-empty">No sessions found</div></div>
         </section>
 
         <div class="sidebar-bottom">
+          <button class="sidebar-navigation-button sidebar-settings-button" id="settings-button" type="button" aria-label="Settings" title="Settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8.7a3.3 3.3 0 1 0 0 6.6 3.3 3.3 0 0 0 0-6.6ZM19.2 13.5l1.2.9-1.4 2.5-1.5-.6a7.8 7.8 0 0 1-1.5.9l-.2 1.6h-2.9l-.3-1.6a7.8 7.8 0 0 1-1.6-.7l-1.4.7-1.5-2.5 1.2-1.1a7.2 7.2 0 0 1-.1-1.8L6.1 11l1.2-2.7 1.6.4a7.8 7.8 0 0 1 1.4-1L10.4 6h3l.3 1.6c.6.2 1.1.5 1.6.8l1.5-.6 1.4 2.5-1.2 1.1a7 7 0 0 1 .2 2.1Z"/></svg><span>Settings</span></button>
           <div class="account-card" id="account-card">
             <div class="account-avatar" aria-hidden="true">F</div>
             <div class="account-copy"><strong id="connection-label">Connecting to Codex</strong><span id="account-plan">Checking your account</span><span id="cli-version" class="cli-version">Codex CLI</span></div>
@@ -87,7 +90,7 @@
             <button class="topbar-button" id="plugins-toggle" type="button" aria-label="Manage Codex plugins" aria-controls="context-panel" aria-pressed="false" title="Plugins · Ctrl+Shift+4 · synced with Codex"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3v5m6-5v5M8 8h8v3a3 3 0 0 0 3 3h1v3a4 4 0 0 1-4 4H8a4 4 0 0 1-4-4v-3h1a3 3 0 0 0 3-3V8Zm-4 6H3m18 0h-2"/></svg><span>Plugins</span></button>
             <button class="topbar-button" id="browser-toggle" type="button" aria-label="Open Forge's in-app browser" aria-controls="browser-workspace" aria-pressed="false" title="In-app browser · Ctrl+Shift+5"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="15" rx="2"/><path d="M3 8h18m-14-2h.01M10 6h.01M8 22h8m-4-3v3"/></svg><span>Browser</span></button>
             </div>
-            <button class="icon-button settings-button" id="settings-button" type="button" aria-label="Switch workspace" title="Switch workspace"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8.7a3.3 3.3 0 1 0 0 6.6 3.3 3.3 0 0 0 0-6.6ZM19.2 13.5l1.2.9-1.4 2.5-1.5-.6a7.8 7.8 0 0 1-1.5.9l-.2 1.6h-2.9l-.3-1.6a7.8 7.8 0 0 1-1.6-.7l-1.4.7-1.5-2.5 1.2-1.1a7.2 7.2 0 0 1-.1-1.8L6.1 11l1.2-2.7 1.6.4a7.8 7.8 0 0 1 1.4-1L10.4 6h3l.3 1.6c.6.2 1.1.5 1.6.8l1.5-.6 1.4 2.5-1.2 1.1a7 7 0 0 1 .2 2.1Z"/></svg></button>
+
           </div>
         </header>
 
@@ -116,7 +119,7 @@
 
         <div class="workspace-surface" id="workspace-surface">
           <section class="welcome-view" id="welcome-view">
-            <div class="welcome-hero"><span class="welcome-mark" aria-hidden="true"></span><div class="welcome-copy-block"><h1 id="welcome-title">What will you make today?</h1><p id="welcome-copy">A little curiosity. A place to build.</p></div></div>
+            <div class="welcome-hero"><span class="welcome-mark" aria-hidden="true"></span><div class="welcome-copy-block"><h1 id="welcome-title">What can I help you build?</h1><p id="welcome-copy">A little curiosity. A place to build.</p></div></div>
           </section>
 
           <section class="conversation-view" id="conversation-view" hidden>
@@ -124,6 +127,7 @@
           </section>
 
           <div class="composer-dock" id="composer-dock">
+            <div class="composer-context"><span class="composer-context-project"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h6l2 2h10v11H3V6Z"/></svg><span id="composer-project-name"></span></span><span id="composer-stage-label">Code session</span></div>
             <div class="composer-shell" id="composer-shell">
               <div class="composer-resize-grip" id="composer-resize-grip" role="separator" aria-label="Resize chatbox height" aria-orientation="horizontal" tabindex="0" title="Drag to resize · double-click for automatic height"><span></span></div>
               <div class="composer-drop-overlay" id="composer-drop-overlay" role="status" aria-live="polite" hidden><span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m-5 5 5-5 5 5M4 15v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4"/></svg>Drop files to attach</span></div>
@@ -134,7 +138,11 @@
               <input id="image-input" type="file" multiple hidden>
               <div class="composer-bottom">
                 <div class="composer-controls">
-                  <button class="attach-image-button" id="attach-image" type="button" aria-label="Attach images and files" title="Attach images and files, or paste an image from the clipboard"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8.5 12.5 6.9-6.9a3.2 3.2 0 0 1 4.5 4.5l-8.8 8.8a5.1 5.1 0 0 1-7.2-7.2l8.1-8.1"/></svg></button>
+                  <button class="attach-image-button" id="attach-image" type="button" aria-label="Attach images and files" title="Attach images and files, or paste an image from the clipboard"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
+
+                  <div class="ask-mode-wrap" id="ask-mode-wrap"><button class="ask-mode" id="ask-mode" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="ask-mode-menu" title="Choose how Codex can work in this folder"><span id="ask-mode-label">Code</span><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg></button><div class="ask-mode-menu" id="ask-mode-menu" role="menu" aria-label="Work mode" hidden><button class="ask-mode-option" type="button" role="menuitemradio" data-access-mode="read"><span><strong>Ask</strong><small>Read files and answer without editing</small></span><span class="ask-mode-check" aria-hidden="true"></span></button><button class="ask-mode-option" type="button" role="menuitemradio" data-access-mode="plan"><span><strong>Plan</strong><small>Explore and plan before making changes</small></span><span class="ask-mode-check" aria-hidden="true"></span></button><button class="ask-mode-option" type="button" role="menuitemradio" data-access-mode="write"><span><strong>Code</strong><small>Make changes in the selected folder</small></span><span class="ask-mode-check" aria-hidden="true"></span></button></div></div>
+                </div>
+                <div class="composer-actions">
                   <div class="model-picker" id="model-picker">
                     <button class="model-picker-trigger" id="model-picker-trigger" type="button" aria-haspopup="listbox" aria-expanded="false" aria-controls="model-options" title="Choose a model" disabled>
                       <span class="model-picker-mark tier-default" id="model-picker-mark" aria-hidden="true"></span>
@@ -148,20 +156,21 @@
                     </div>
                     <select id="model-select" aria-label="Model" tabindex="-1" aria-hidden="true" hidden><option value="">Loading models…</option></select>
                   </div>
-                  <div class="effort-control" id="effort-control">
-                    <button class="effort-trigger" id="effort-trigger" type="button" aria-expanded="false" aria-controls="effort-popover" title="Choose reasoning effort"><span>Reasoning</span><strong id="effort-current-label">Medium</strong><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg></button>
-                    <div class="effort-popover" id="effort-popover" hidden>
-                      <div class="effort-popover-heading"><span>Reasoning effort</span><strong id="effort-popover-value">Medium</strong></div>
-                      <div class="effort-track-shell"><div class="effort-blocks" id="effort-blocks" aria-hidden="true"></div><input id="effort-select" class="effort-slider" type="range" min="0" max="5" step="1" value="1" aria-label="Reasoning effort" aria-valuetext="Medium" title="Reasoning effort"></div>
-                      <div class="effort-endpoints"><span id="effort-min-label">Low</span><span id="effort-max-label">Ultracode</span></div>
-                      <div class="effort-description" id="effort-description">Balanced depth for everyday tasks.</div>
-                      <div class="effort-scale-hint">Higher effort uses more of your Codex limits.</div>
-                    </div>
-                  </div>
-                  <span class="composer-usage" id="composer-usage">Codex limits apply</span>
-                </div>
-                <div class="composer-actions"><div class="ask-mode-wrap" id="ask-mode-wrap"><button class="ask-mode" id="ask-mode" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="ask-mode-menu" title="Choose how Codex can work in this folder"><span id="ask-mode-label">Code</span><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg></button><div class="ask-mode-menu" id="ask-mode-menu" role="menu" aria-label="Work mode" hidden><button class="ask-mode-option" type="button" role="menuitemradio" data-access-mode="read"><span><strong>Ask</strong><small>Read files and answer without editing</small></span><span class="ask-mode-check" aria-hidden="true"></span></button><button class="ask-mode-option" type="button" role="menuitemradio" data-access-mode="plan"><span><strong>Plan</strong><small>Explore and plan before making changes</small></span><span class="ask-mode-check" aria-hidden="true"></span></button><button class="ask-mode-option" type="button" role="menuitemradio" data-access-mode="write"><span><strong>Code</strong><small>Make changes in the selected folder</small></span><span class="ask-mode-check" aria-hidden="true"></span></button></div></div><span class="composer-shortcut">Enter to send</span><button class="stop-button" id="stop-turn" type="button" hidden>Stop</button><button class="send-button" id="send-button" type="button" aria-label="Send message"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5m-6 6 6-6 6 6"/></svg></button></div>
+                  <span class="composer-shortcut">Enter to send</span><button class="stop-button" id="stop-turn" type="button" hidden>Stop</button><button class="send-button" id="send-button" type="button" aria-label="Send message"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5m-6 6 6-6 6 6"/></svg></button></div>
               </div>
+            </div>
+            <div class="composer-meta">
+              <div class="effort-control" id="effort-control">
+                <button class="effort-trigger" id="effort-trigger" type="button" aria-expanded="false" aria-controls="effort-popover" title="Choose reasoning effort"><span>Reasoning</span><strong id="effort-current-label">Medium</strong><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg></button>
+                <div class="effort-popover" id="effort-popover" hidden>
+                  <div class="effort-popover-heading"><span>Reasoning effort</span><strong id="effort-popover-value">Medium</strong></div>
+                  <div class="effort-track-shell"><div class="effort-blocks" id="effort-blocks" aria-hidden="true"></div><input id="effort-select" class="effort-slider" type="range" min="0" max="5" step="1" value="1" aria-label="Reasoning effort" aria-valuetext="Medium" title="Reasoning effort"></div>
+                  <div class="effort-endpoints"><span id="effort-min-label">Low</span><span id="effort-max-label">Ultracode</span></div>
+                  <div class="effort-description" id="effort-description">Balanced depth for everyday tasks.</div>
+                  <div class="effort-scale-hint">Higher effort uses more of your Codex limits.</div>
+                </div>
+              </div>
+              <span class="composer-usage" id="composer-usage">Codex limits apply</span>
             </div>
             <div class="planning-note" id="planning-note" hidden><span><strong>Planning mode</strong><small>Explore the project and shape a plan. File edits are disabled.</small></span><button class="quiet-button" id="plan-build" type="button">Switch to Code</button></div>
             <div class="composer-caption"><span class="shield-icon" aria-hidden="true">◇</span><span>Codex uses your selected folder. It asks before actions that need more permission.</span></div>
@@ -232,7 +241,7 @@
           </section>
           <section class="appearance-section"><div class="appearance-section-title"><h3>Colors</h3><span>Pick a color or enter its hex code</span></div><div class="theme-color-grid" id="theme-colors"></div><details class="appearance-advanced"><summary>More colors · messages, code, status &amp; model tiers</summary><div class="theme-color-grid" id="theme-colors-advanced"></div></details></section>
           <section class="appearance-section"><div class="appearance-section-title"><h3>Typography</h3><span>Interface, conversation &amp; code</span></div><div class="theme-font-grid" id="theme-fonts"></div><p class="appearance-font-note">Use an installed font or upload WOFF2, WOFF, TTF, or OTF files (up to 5 MB each). Uploaded fonts stay on this device.</p><div class="theme-range-grid" id="theme-ranges"></div></section>
-          <section class="appearance-section"><div class="appearance-section-title"><h3>Chatbox</h3><span>Shape &amp; height</span></div><div class="composer-appearance-grid"><label class="appearance-select-field"><span>Shape</span><select id="composer-shape"><option value="rounded">Rounded · default</option><option value="pill">Pill</option><option value="square">Square</option></select></label><label class="theme-range-field"><span><span>Text area height</span><output id="composer-height-value">Automatic</output></span><input id="composer-height" type="range" min="64" max="360" step="4" value="132"></label></div><div class="composer-appearance-footer"><span>Drag the grip above your message. Double-click it to return to automatic height.</span><button class="quiet-button" id="composer-height-auto" type="button" aria-pressed="true">Automatic height</button></div></section>
+          <section class="appearance-section"><div class="appearance-section-title"><h3>Chatbox</h3><span>Shape &amp; height</span></div><div class="composer-appearance-grid"><label class="appearance-select-field"><span>Shape</span><select id="composer-shape"><option value="rounded">Rounded · default</option><option value="pill">Pill</option><option value="square">Square</option></select></label><label class="theme-range-field"><span><span id="composer-height-caption">First message height</span><output id="composer-height-value">Automatic</output></span><input id="composer-height" type="range" min="64" max="360" step="4" value="132"></label></div><div class="composer-appearance-footer"><span>First messages and follow-ups remember their own height. Drag the grip to resize; double-click for automatic height.</span><button class="quiet-button" id="composer-height-auto" type="button" aria-pressed="true">Automatic height</button></div></section>
           <section class="appearance-section"><div class="appearance-section-title"><h3>Finishing touches</h3></div><label class="appearance-select-field"><span>Workspace background</span><select id="theme-pattern"><option value="none">Clean canvas</option><option value="dots">Subtle dots</option><option value="grid">Fine grid</option></select></label><div class="appearance-sample"><span class="sample-label">LIVE PREVIEW</span><strong>A little clarity goes a long way.</strong><p>Explore, build, and refine your next idea.</p><code>const next = await createSomething();</code></div></section>
         </div>
         <footer class="appearance-footer"><span id="appearance-save-status" role="status">Saved on this device</span><div><button class="quiet-button" id="theme-reset" type="button">Reset</button><button class="primary-button" id="appearance-done" type="button">Done</button></div></footer>
