@@ -1,6 +1,6 @@
 {
   "name": "forge-codex-workspace",
-  "version": "1.0.49",
+  "version": "1.0.50",
   "license": "MIT",
   "description": "Forge desktop AI workspace for Codex, Claude Code, and external APIs",
   "author": "Forge",
@@ -34,6 +34,10 @@
       "package.json"
     ],
     "extraResources": [
+      {
+        "from": "ninerouter-manager.mjs",
+        "to": "forge/ninerouter-manager.mjs"
+      },
       {
         "from": "omniroute-sync.mjs",
         "to": "forge/omniroute-sync.mjs"

@@ -15,6 +15,7 @@ import { browserCodexConfig, browserCodexArgs, computerUseInstructions } from '.
 import { createOmniRouteManager, isLocalOmniRoute, OMNIROUTE_BASE_URL } from './omniroute-manager.mjs';
 import { createOmniRouteRouting, omniRouteFallbacks } from './omniroute-routing.mjs';
 import { createOmniRouteSync } from './omniroute-sync.mjs';
+import { createNineRouterManager, defaultNineRouter, isLocalNineRouter, NINEROUTER_BASE_URL, NINEROUTER_PROVIDER_ID } from './ninerouter-manager.mjs';
 import './public/question-protocol.js';
 import './public/plugin-protocol.js';
 import './public/file-paths.js';
@@ -27,6 +28,7 @@ const settingsPath = path.join(dataRoot, 'settings.json');
 const providerKeysPath = path.join(dataRoot, 'provider-secrets.json');
 const providerAuthScript = path.join(appRoot, 'provider-auth.mjs');
 const omniRoute = createOmniRouteManager({ appRoot, dataRoot });
+const nineRouter = createNineRouterManager({ appRoot, dataRoot });
 const bundledCodexCli = path.join(appRoot, 'node_modules', '@openai', 'codex', 'bin', 'codex.js');
 const codexExecutable = process.env.CODEX_CLI || (existsSync(bundledCodexCli) ? process.execPath : 'codex');
 const codexPrefixArgs = process.env.CODEX_CLI || !existsSync(bundledCodexCli) ? [] : [bundledCodexCli];
@@ -36,7 +38,7 @@ const host = '127.0.0.1';
 const sessionToken = randomBytes(32).toString('hex');
 const bridgeToken = randomBytes(32).toString('hex');
 const ignoredFolders = new Set(['.git', 'node_modules', '.next', 'dist', 'build', 'coverage', '.turbo', '.venv', 'venv', '__pycache__']);
-const defaultSettings = { activeWorkspace: '', recentWorkspaces: [], providers: [], askExternalApprovals: true, freeRouting: { enabled: false, codexFallback: false } };
+const defaultSettings = { activeWorkspace: '', recentWorkspaces: [], providers: [defaultNineRouter()], askExternalApprovals: true, freeRouting: { enabled: false, codexFallback: false } };
 const computerUseDeveloperInstruction = computerUseInstructions();
 let pluginCatalogCache = null;
 let pluginCatalogCacheAt = 0;
@@ -124,9 +126,11 @@ async function loadSettings() {
       name: String(provider.name || provider.id).slice(0, 48),
       baseUrl: String(provider.baseUrl || ''),
       apiFormat: ['auto', 'chat', 'responses'].includes(provider.apiFormat) ? provider.apiFormat : 'auto',
-      ...(['kilo-free', 'omniroute'].includes(provider.nativePreset) ? { nativePreset: provider.nativePreset } : {}),
+      ...(['kilo-free', 'omniroute', '9router'].includes(provider.nativePreset) ? { nativePreset: provider.nativePreset } : {}),
       models: Array.isArray(provider.models) ? provider.models.filter((model) => model && /^[\w./:@+-]{1,180}$/.test(model.id || '')).slice(0, 100).map((model) => ({ id: model.id, name: String(model.name || model.id).slice(0, 180) })) : [],
+      ...(provider.nativePreset === '9router' && /^[\w./:@+-]{1,180}$/.test(provider.defaultFreeModel || '') ? { defaultFreeModel: provider.defaultFreeModel } : {}),
     })) : [];
+    if (!providers.some((provider) => provider.id === NINEROUTER_PROVIDER_ID)) providers.unshift(defaultNineRouter());
     return { ...defaultSettings, ...saved, askExternalApprovals: saved.askExternalApprovals !== false, freeRouting: { enabled: saved.freeRouting?.enabled === true, codexFallback: saved.freeRouting?.codexFallback === true }, recentWorkspaces: Array.isArray(saved.recentWorkspaces) ? saved.recentWorkspaces : [], providers };
   } catch {
     return { ...defaultSettings };
@@ -338,7 +342,8 @@ function providerIdFromName(value) {
 function publicProviders(encryptedKeys = {}) {
   const providers = settings.providers.map((provider) => ({
     ...provider,
-    authConfigured: isLocalOmniRoute(provider) || typeof encryptedKeys[provider.id] === 'string' && Boolean(encryptedKeys[provider.id]),
+    authConfigured: isLocalOmniRoute(provider) || isLocalNineRouter(provider) || typeof encryptedKeys[provider.id] === 'string' && Boolean(encryptedKeys[provider.id]),
+    ...(provider.id === NINEROUTER_PROVIDER_ID ? { defaultFree: true } : {}),
   }));
   if (settings.freeRouting.enabled) providers.push({ id: FREE_PROVIDER_ID, name: 'Free Auto Route', authConfigured: Boolean(encryptedKeys[FREE_KEY_IDS.openrouter] && encryptedKeys[FREE_KEY_IDS.nvidia]), models: [{ id: 'auto-free', name: 'OpenRouter Free Auto Route' }] });
   return providers;
@@ -828,7 +833,7 @@ async function startCodexTask(input, cwd, { announceContinuation, signal } = {})
   const encryptedKeys = await readEncryptedProviderKeys(providerKeysPath);
   if (providerId === FREE_PROVIDER_ID) {
     if (!settings.freeRouting.enabled || !encryptedKeys[FREE_KEY_IDS.openrouter] || !encryptedKeys[FREE_KEY_IDS.nvidia]) throw new Error('Enable Free Auto Route and save both API keys in Settings first.');
-  } else if (provider && !encryptedKeys[providerId] && !isLocalOmniRoute(provider)) throw new Error(`Add an API key for ${provider.name} in provider settings.`);
+  } else if (provider && !encryptedKeys[providerId] && !isLocalOmniRoute(provider) && !isLocalNineRouter(provider)) throw new Error(`Add an API key for ${provider.name} in provider settings.`);
   if (!provider && !(await getAccount()).connected) throw new Error('Sign in to ChatGPT before starting a Codex task.');
   let threadId = String(input.threadId || '');
   if (threadId) {
@@ -1234,6 +1239,7 @@ async function handleApi(req, res, url) {
   if (!requireSession(req)) return json(res, 403, { error: 'The local app session is invalid. Refresh Forge to reconnect.' });
   const route = url.pathname;
   if (req.method === 'GET' && route === '/api/omniroute') return json(res, 200, await omniRoute.status());
+  if (req.method === 'GET' && route === '/api/9router') return json(res, 200, await nineRouter.status());
   if (req.method === 'GET' && route === '/api/events') {
     res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
     res.write(': connected\n\n');
@@ -1410,6 +1416,16 @@ async function handleApi(req, res, url) {
         const results = await Promise.allSettled([freeRouter.catalog('openrouter', { force: true }), freeRouter.catalog('nvidia', { force: true })]);
         return json(res, 200, { catalogs: results.map((result, index) => ({ provider: index ? 'nvidia' : 'openrouter', ...(result.status === 'fulfilled' ? { count: result.value.length, model: result.value[0].id, name: result.value[0].name || result.value[0].id } : { error: result.reason.message }) })) });
       }
+      if (route === '/api/9router/start') {
+        nineRouter.installAndStart();
+        return json(res, 202, await nineRouter.status());
+      }
+      if (route === '/api/9router/dashboard') {
+        const baseUrl = normalizeProviderBaseUrl(input.baseUrl || NINEROUTER_BASE_URL);
+        if (!isLocalNineRouter({ nativePreset: '9router', baseUrl })) throw new Error('Use a local 9router address.');
+        if (baseUrl === NINEROUTER_BASE_URL && !(await nineRouter.status()).running) await nineRouter.start();
+        return json(res, 200, { url: new URL('/dashboard', baseUrl).href });
+      }
       if (route === '/api/omniroute/start') {
         omniRoute.installAndStart();
         return json(res, 202, await omniRoute.status());
@@ -1425,6 +1441,9 @@ async function handleApi(req, res, url) {
         const baseUrl = normalizeProviderBaseUrl(input.baseUrl);
         const kiloFree = input.nativePreset === 'kilo-free';
         const localOmni = isLocalOmniRoute({ nativePreset: input.nativePreset, baseUrl });
+        const localNine = isLocalNineRouter({ nativePreset: input.nativePreset, baseUrl });
+        if (input.nativePreset === '9router' && !localNine) throw new Error('Native 9router must use a loopback HTTP address.');
+        if (localNine && baseUrl === NINEROUTER_BASE_URL && !(await nineRouter.status()).running) await nineRouter.start();
         if (input.nativePreset === 'omniroute' && !localOmni) throw new Error('Local OmniRoute must use a loopback HTTP address.');
         if (kiloFree && baseUrl !== KILO_FREE_BASE_URL) throw new Error('Kilo Free Router requires the official Kilo gateway endpoint.');
         let apiKey = String(input.apiKey || '').trim();
@@ -1433,20 +1452,25 @@ async function handleApi(req, res, url) {
           const encrypted = encryptedKeys[String(input.id)];
           if (encrypted) apiKey = await decryptProviderKey(encrypted);
         }
-        if (!apiKey && !localOmni) throw new Error('Enter the provider API key before loading models.');
+        if (!apiKey && !localOmni && !localNine) throw new Error('Enter the provider API key before loading models.');
         const response = await fetch(`${baseUrl}/models`, {
           headers: { ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}), Accept: 'application/json' },
           signal: AbortSignal.timeout(15000),
         });
-        if (!response.ok) throw new Error(`The provider model list returned HTTP ${response.status}. Check the endpoint and API key.`);
+        if (!response.ok) throw new Error(localNine && [401, 403].includes(response.status) ? 'Create an API key in the 9router dashboard and paste it here, then load models again.' : `The provider model list returned HTTP ${response.status}. Check the endpoint and API key.`);
         const payload = await response.json();
         const rows = Array.isArray(payload?.data) ? payload.data : Array.isArray(payload?.models) ? payload.models : [];
-        const availableIds = [...new Set(rows.filter((model) => model?.active !== false).map((model) => String(model?.id || model?.name || '').trim()).filter((id) => /^[\w./:@+-]{1,180}$/.test(id)))].sort((a, b) => localOmni ? Number(b.startsWith('auto')) - Number(a.startsWith('auto')) : 0).slice(0, 100);
+        // An unconfigured 9router can publish its entire static provider catalog.
+        // Discover actual user-created coding routes, not that unavailable fallback list.
+        // Individual model IDs remain supported through manual configuration.
+        const eligibleRows = localNine ? rows.filter((model) => model.owned_by === 'combo' && (!model.kind || model.kind === 'llm') && model.capabilities?.tools !== false) : rows;
+        const comboIds = new Set(eligibleRows.filter((model) => model.owned_by === 'combo').map((model) => model.id));
+        const availableIds = [...new Set(eligibleRows.filter((model) => model?.active !== false).map((model) => String(model?.id || model?.name || '').trim()).filter((id) => /^[\w./:@+-]{1,180}$/.test(id)))].sort((a, b) => localNine ? Number(comboIds.has(b)) - Number(comboIds.has(a)) : localOmni ? Number(b.startsWith('auto')) - Number(a.startsWith('auto')) : 0).slice(0, 100);
         const codingOnly = kiloFree || isGroqProvider({ baseUrl });
         const freeAlias = rows.find((model) => model?.id === KILO_FREE_MODEL);
         const freePrice = freeAlias?.pricing && ['prompt', 'completion'].every((field) => freeAlias.pricing[field] != null && String(freeAlias.pricing[field]).trim() !== '' && Number(freeAlias.pricing[field]) === 0);
         const modelIds = kiloFree ? (freePrice && freeAlias.supported_parameters?.includes('tools') ? [KILO_FREE_MODEL] : []) : codingOnly ? GROQ_CODING_MODELS.filter((id) => availableIds.includes(id)) : availableIds;
-        if (!modelIds.length) throw new Error(kiloFree ? 'Kilo Auto Free is not currently listed as a zero-price tool-capable route. Try again later; no paid route will be added.' : 'The provider returned no model IDs. Add model IDs manually.');
+        if (!modelIds.length) throw new Error(localNine ? 'Connect a free provider and create a coding combo in the 9router dashboard, then load models again.' : kiloFree ? 'Kilo Auto Free is not currently listed as a zero-price tool-capable route. Try again later; no paid route will be added.' : 'The provider returned no model IDs. Add model IDs manually.');
         return json(res, 200, { modelIds, codingOnly });
       }
       if (route === '/api/providers/save') {
@@ -1463,17 +1487,22 @@ async function handleApi(req, res, url) {
         }
         const baseUrl = normalizeProviderBaseUrl(input.baseUrl);
         const models = normalizeProviderModels(input.models);
-        const nativePreset = ['kilo-free', 'omniroute'].includes(input.nativePreset) ? input.nativePreset : undefined;
+        const nativePreset = ['kilo-free', 'omniroute', '9router'].includes(input.nativePreset) ? input.nativePreset : undefined;
+        if (id === NINEROUTER_PROVIDER_ID && nativePreset !== '9router') throw new Error('The default free provider is reserved for 9router.');
         if (nativePreset === 'kilo-free' && (baseUrl !== KILO_FREE_BASE_URL || models.some((model) => model.id !== KILO_FREE_MODEL))) throw new Error('Kilo Free Router is restricted to the official endpoint and kilo-auto/free.');
         const localOmni = isLocalOmniRoute({ nativePreset, baseUrl });
+        const localNine = isLocalNineRouter({ nativePreset, baseUrl });
+        if (nativePreset === '9router' && !localNine) throw new Error('Native 9router must use a loopback HTTP address.');
         if (nativePreset === 'omniroute' && !localOmni) throw new Error('Local OmniRoute must use a loopback HTTP address.');
         const apiKey = String(input.apiKey || '').trim();
         if (apiKey.length > 4096) throw new Error('Provider API keys must be 4,096 characters or fewer.');
         const encryptedKeys = await readEncryptedProviderKeys(providerKeysPath);
         if (apiKey) encryptedKeys[id] = await encryptProviderKey(apiKey);
-        if (!encryptedKeys[id] && !localOmni) throw new Error('Enter an API key for this provider.');
+        if (!encryptedKeys[id] && !localOmni && !localNine) throw new Error('Enter an API key for this provider.');
         const apiFormat = ['auto', 'chat', 'responses'].includes(input.apiFormat) ? input.apiFormat : 'auto';
-        const provider = { id, name, baseUrl, models, apiFormat: nativePreset ? 'chat' : apiFormat, ...(nativePreset ? { nativePreset } : {}) };
+        const defaultFreeModel = String(input.defaultFreeModel || '').trim();
+        if (id === NINEROUTER_PROVIDER_ID && !models.some((model) => model.id === defaultFreeModel)) throw new Error('Choose a default free model or combo from the model IDs you added.');
+        const provider = { id, name, baseUrl, models, apiFormat: nativePreset ? 'chat' : apiFormat, ...(nativePreset ? { nativePreset } : {}), ...(id === NINEROUTER_PROVIDER_ID ? { defaultFreeModel } : {}) };
         await writeEncryptedProviderKeys(providerKeysPath, encryptedKeys);
         settings.providers = existing
           ? settings.providers.map((item) => item.id === id ? provider : item)
@@ -1484,6 +1513,7 @@ async function handleApi(req, res, url) {
       }
       if (route === '/api/providers/remove') {
         const id = String(input.id || '');
+        if (id === NINEROUTER_PROVIDER_ID) throw new Error('9router is the default free provider. Edit its connection instead.');
         if (!settings.providers.some((provider) => provider.id === id)) throw new Error('That provider no longer exists.');
         const encryptedKeys = await readEncryptedProviderKeys(providerKeysPath);
         delete encryptedKeys[id];
@@ -1667,7 +1697,7 @@ async function handleApi(req, res, url) {
   return json(res, 404, { error: 'Route not found.' });
 }
 
-const mimeTypes = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml' };
+const mimeTypes = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml', '.woff2': 'font/woff2', '.woff': 'font/woff', '.ttf': 'font/ttf', '.otf': 'font/otf' };
 const httpServer = createServer(async (req, res) => {
   setSecurityHeaders(res);
   const url = new URL(req.url || '/', `http://${host}:${port}`);
@@ -1728,8 +1758,9 @@ const httpServer = createServer(async (req, res) => {
         if (!provider.models.some((item) => item.id === input.model)) throw new Error('Choose a model saved for this provider.');
         const keys = await readEncryptedProviderKeys(providerKeysPath);
         const key = keys[provider.id] ? await decryptProviderKey(keys[provider.id]) : '';
-        if (!key && !isLocalOmniRoute(provider)) throw new Error(`Add your ${provider.name} API key in Settings.`);
+        if (!key && !isLocalOmniRoute(provider) && !isLocalNineRouter(provider)) throw new Error(`Add your ${provider.name} API key in Settings.`);
         const normalizedProvider = { ...provider, baseUrl:normalizeProviderBaseUrl(provider.baseUrl) };
+        if (isLocalNineRouter(normalizedProvider) && normalizedProvider.baseUrl === NINEROUTER_BASE_URL && !(await nineRouter.status()).running) await nineRouter.start();
         const active = [...turnRequests.values()].filter(request => request.providerId === provider.id);
         router = isLocalOmniRoute(normalizedProvider) ? omniRouting.forProvider({provider:normalizedProvider,model:input.model,key,scopeId:requestThreadId || (active.length===1?active[0].threadId:'default'),ensureGateway:async()=>{
           if (normalizedProvider.baseUrl !== OMNIROUTE_BASE_URL) return;
@@ -1807,6 +1838,7 @@ async function shutdownForge() {
   if (shuttingDown) return;
   shuttingDown = true;
   await omniRoute.stop();
+  await nineRouter.stop();
   setTimeout(() => process.exit(0), 1800).unref();
   await codex.stop();
   httpServer.close(() => process.exit(0));

@@ -392,6 +392,9 @@ function showProviderError(message) {
 
 function resetProviderForm() {
   $('#omniroute-setup').hidden = true;
+  $('#ninerouter-setup').hidden = true;
+  $('#provider-default-free-model').value = '';
+  $('#ninerouter-model-choices').replaceChildren();
   $('#provider-id').value = '';
   $('#provider-native-preset').value = '';
   $('#provider-models').readOnly = false;
@@ -432,17 +435,17 @@ function renderProviderList() {
     const mark = document.createElement('span');
     mark.className = `provider-entry-mark ${provider.id.includes('nvidia') ? 'nvidia' : ''}`.trim();
     mark.setAttribute('aria-hidden', 'true');
-    mark.textContent = provider.nativePreset === 'omniroute' ? 'O' : provider.nativePreset === 'kilo-free' ? 'K' : provider.id.includes('nvidia') ? 'N' : provider.id.includes('openrouter') ? '◈' : baseUrl.includes('api.groq.com') ? 'G' : '◇';
+    mark.textContent = provider.nativePreset === '9router' ? '9' : provider.nativePreset === 'omniroute' ? 'O' : provider.nativePreset === 'kilo-free' ? 'K' : provider.id.includes('nvidia') ? 'N' : provider.id.includes('openrouter') ? '◈' : baseUrl.includes('api.groq.com') ? 'G' : '◇';
     const copy = document.createElement('span');
     copy.className = 'provider-entry-copy';
     const name = document.createElement('strong');
-    name.textContent = provider.name;
+    name.textContent = provider.name + (provider.defaultFree ? ' · Default free' : '');
     const endpoint = document.createElement('small');
     endpoint.textContent = isFreeRoute ? 'OpenRouter → NVIDIA NIM · Managed in Settings' : `${baseUrl} · ${modelCount} model${modelCount === 1 ? '' : 's'}`;
     copy.append(name, endpoint);
     const status = document.createElement('span');
     status.className = 'provider-entry-state';
-    status.textContent = provider.nativePreset === 'omniroute' ? 'Local gateway' : isFreeRoute ? (provider.authConfigured ? 'Keys saved' : 'Add routing keys') : provider.authConfigured ? 'Key saved' : 'Add API key';
+    status.textContent = provider.nativePreset === '9router' ? provider.defaultFreeModel ? 'Configured' : 'Set up router' : provider.nativePreset === 'omniroute' ? 'Local gateway' : isFreeRoute ? (provider.authConfigured ? 'Keys saved' : 'Add routing keys') : provider.authConfigured ? 'Key saved' : 'Add API key';
     if (!provider.authConfigured) status.style.color = '#a15e49';
     const actions = document.createElement('span');
     actions.className = 'provider-entry-actions';
@@ -455,7 +458,8 @@ function renderProviderList() {
       edit.type = 'button'; edit.textContent = 'Edit'; edit.dataset.providerEdit = provider.id;
       const remove = document.createElement('button');
       remove.type = 'button'; remove.className = 'provider-remove'; remove.textContent = 'Remove'; remove.dataset.providerRemove = provider.id;
-      actions.append(edit, remove);
+      actions.append(edit);
+      if (!provider.defaultFree) actions.append(remove);
     }
     row.append(mark, copy, status, actions);
     list.append(row);
@@ -545,6 +549,8 @@ async function connectAnthropic() {
 }
 
 function selectProviderPreset(preset) {
+  if (preset === '9router') { editProvider('9router'); return; }
+  $('#ninerouter-setup').hidden = true;
   $$('.provider-preset').forEach((button) => button.classList.toggle('selected', button.dataset.providerPreset === preset));
   const presets = {
     openrouter: { name: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1', placeholder: 'sk-or-…' },
@@ -582,27 +588,77 @@ function editProvider(providerId) {
   $('#provider-id').value = provider.id;
   const kiloFree = provider.nativePreset === 'kilo-free';
   $('#provider-native-preset').value = provider.nativePreset || '';
+  const nine = provider.nativePreset === '9router';
+  $('#ninerouter-setup').hidden = !nine;
+  $('#provider-default-free-model').value = provider.defaultFreeModel || '';
+  updateNineRouterChoices(provider.models.map((model) => model.id));
   $('#omniroute-setup').hidden = provider.nativePreset !== 'omniroute';
   if (provider.nativePreset === 'omniroute') void refreshOmniRoute();
   $('#provider-models').readOnly = kiloFree;
   $('#provider-base-url').readOnly = kiloFree;
-  $('#provider-api-format').disabled = kiloFree || provider.nativePreset === 'omniroute';
+  $('#provider-api-format').disabled = kiloFree || provider.nativePreset === 'omniroute' || nine;
   $('#kilo-setup-note').hidden = !kiloFree;
   $('#provider-name').value = provider.name;
   $('#provider-base-url').value = provider.baseUrl;
+  if (nine) void refreshNineRouter();
   $('#provider-api-format').value = provider.apiFormat || 'auto';
   $('#provider-api-key').value = '';
-  $('#provider-api-key').placeholder = provider.nativePreset === 'omniroute' ? 'Optional · leave blank to keep any saved key' : 'Leave blank to keep the saved key';
-  $('#provider-key-hint').textContent = provider.nativePreset === 'omniroute' ? 'Optional for a local gateway without key authentication' : provider.authConfigured ? 'A saved key is already encrypted locally' : 'Stored encrypted on this Windows account';
+  $('#provider-api-key').placeholder = nine ? 'Gateway key from your 9router dashboard · leave blank to keep saved key' : provider.nativePreset === 'omniroute' ? 'Optional · leave blank to keep any saved key' : 'Leave blank to keep the saved key';
+  $('#provider-key-hint').textContent = nine ? 'Required if API-key authentication is enabled in 9router' : provider.nativePreset === 'omniroute' ? 'Optional for a local gateway without key authentication' : provider.authConfigured ? 'A saved key is already encrypted locally' : 'Stored encrypted on this Windows account';
   $('#provider-models').value = provider.models.map((model) => model.id).join('\n');
   $('#provider-form-title').textContent = `Edit ${provider.name}`;
   $('#provider-save').textContent = 'Save provider';
   $('#provider-cancel-edit').hidden = false;
-  const preset = provider.nativePreset === 'omniroute' ? 'omniroute' : kiloFree ? 'kilo-free' : provider.baseUrl.includes('api.groq.com') ? 'groq' : provider.id.includes('nvidia') ? 'nvidia' : provider.id.includes('openrouter') ? 'openrouter' : 'custom';
+  const preset = nine ? '9router' : provider.nativePreset === 'omniroute' ? 'omniroute' : kiloFree ? 'kilo-free' : provider.baseUrl.includes('api.groq.com') ? 'groq' : provider.id.includes('nvidia') ? 'nvidia' : provider.id.includes('openrouter') ? 'openrouter' : 'custom';
   $('#groq-setup-note').hidden = preset !== 'groq';
   $$('.provider-preset').forEach((button) => button.classList.toggle('selected', button.dataset.providerPreset === preset));
   showProviderError('');
   $('#provider-name').focus();
+}
+
+function updateNineRouterChoices(ids) {
+  $('#ninerouter-model-choices').replaceChildren(...ids.map((id) => new Option(id, id)));
+}
+let nineRouterPoll;
+async function refreshNineRouter() {
+  clearTimeout(nineRouterPoll);
+  if ($('#ninerouter-setup').hidden || $('#providers-modal').hidden) return;
+  const button = $('#ninerouter-start');
+  const managed = $('#provider-base-url').value.trim().replace(/\/$/, '') === 'http://127.0.0.1:20129/v1';
+  if (!managed) {
+    $('#ninerouter-status').textContent = 'Using your existing local gateway · load models to connect';
+    button.hidden = true;
+    return;
+  }
+  button.hidden = false;
+  try {
+    const status = await api('/api/9router');
+    const busy = ['installing', 'starting'].includes(status.phase);
+    $('#ninerouter-status').textContent = status.running ? 'Gateway ready · configure providers in its dashboard' : status.error || (status.phase === 'installing' ? 'Downloading and installing 9router…' : status.phase === 'starting' ? 'Starting your local gateway…' : status.installed ? 'Installed · ready to start' : 'Not installed yet');
+    button.disabled = busy || status.running;
+    button.textContent = status.running ? 'Running' : busy ? status.phase === 'installing' ? 'Installing…' : 'Starting…' : status.installed ? 'Start router' : 'Install & start';
+    if (busy) nineRouterPoll = setTimeout(refreshNineRouter, 2000);
+  } catch (error) { $('#ninerouter-status').textContent = error.message; button.disabled = false; }
+}
+async function startNineRouter() {
+  $('#ninerouter-start').disabled = true;
+  $('#ninerouter-status').textContent = 'Preparing 9router…';
+  try { await api('/api/9router/start', { method: 'POST', body: {} }); await refreshNineRouter(); }
+  catch (error) { $('#ninerouter-status').textContent = error.message; $('#ninerouter-start').disabled = false; }
+}
+async function openNineRouterDashboard(event) {
+  event.preventDefault();
+  const desktop = window.ForgeDesktop?.openExternalUrl;
+  const popup = desktop ? null : window.open('about:blank', '_blank');
+  if (popup) popup.opener = null;
+  const button = $('#ninerouter-dashboard'); button.textContent = 'Opening…';
+  try {
+    const result = await api('/api/9router/dashboard', { method: 'POST', body: { baseUrl: $('#provider-base-url').value } });
+    if (desktop) await window.ForgeDesktop.openExternalUrl(result.url);
+    else if (popup) popup.location.replace(result.url);
+    else throw new Error('Allow browser pop-ups to open the 9router dashboard.');
+  } catch (error) { popup?.close(); showProviderError(error.message); }
+  finally { button.textContent = 'Open dashboard ↗'; }
 }
 
 let omniRoutePoll;
@@ -655,6 +711,7 @@ async function discoverProviderModels() {
     } });
     const current = $('#provider-models').value.split(/[\r\n,]+/).map((item) => item.trim()).filter(Boolean);
     $('#provider-models').value = (result.codingOnly ? result.modelIds : [...new Set([...current, ...result.modelIds])]).join('\n');
+    if ($('#provider-native-preset').value === '9router') updateNineRouterChoices(result.modelIds);
     showToast(`Loaded ${result.modelIds.length} model IDs.`);
   } catch (error) {
     showProviderError(error.message);
@@ -677,6 +734,7 @@ async function saveProvider() {
       apiKey: $('#provider-api-key').value,
       models: $('#provider-models').value,
       apiFormat: $('#provider-api-format').value,
+      defaultFreeModel: $('#provider-default-free-model').value,
     } });
     resetProviderForm();
     await refreshState({ quiet: true });
@@ -952,6 +1010,7 @@ function buildModelCatalog(codexModels, providers, anthropicStatus) {
         description: model.id,
         providerId: provider.id,
         providerModel: model.id,
+        defaultFree: provider.defaultFree === true && model.id === provider.defaultFreeModel,
         reasoningEfforts: ['low', 'medium', 'high'],
         defaultEffort: 'medium',
       });
@@ -985,7 +1044,7 @@ function renderModels() {
     ? automaticDefault
     : gpt6Models.length && savedModel && !savedModel.providerId && !/^gpt-6(?:\.1)?-/.test(savedModel.id)
       ? state.models.find((model) => model.isDefault && /^gpt-6(?:\.1)?-/.test(model.id)) || gpt6Models[0]
-      : savedModel || state.models.find((model) => model.isDefault) || state.models[0];
+      : savedModel || state.models.find((model) => !model.providerId && model.isDefault) || gpt6Models[0] || state.models.find((model) => !model.providerId) || state.models.find((model) => model.isDefault) || state.models[0];
   select.replaceChildren();
   if (!state.models.length) {
     const option = new Option(state.account?.connected ? 'Models unavailable' : 'Connect to choose a model', '');
@@ -1013,11 +1072,12 @@ function renderModels() {
 }
 
 function modelFamilyLabel(model) {
+  if (model.providerId === '9router') return model.defaultFree ? '9ROUTER · DEFAULT FREE ROUTE' : '9ROUTER · LOCAL GATEWAY';
   if (model.providerId === 'forge-free') return 'AUTO · OPENROUTER FREE → NVIDIA NIM';
   if (model.providerId === 'anthropic') return 'ANTHROPIC · CLAUDE CODE';
   if (model.providerId) return state.providers.find((provider) => provider.id === model.providerId)?.name?.toUpperCase() || 'CUSTOM PROVIDER';
   const family = String(model.id || '').split('-').slice(0, 2).join('-').toUpperCase();
-  return family + ' · Codex';
+  return family + ' · Codex · Default paid';
 }
 
 function normalizeModelCatalog(models) {
@@ -1105,6 +1165,9 @@ function renderModelPicker(orderedModels = state.models) {
   const triggerMark = $('#model-picker-mark');
   const models = orderedModels || [];
   const current = models.find((model) => model.id === state.modelId);
+  $('#choose-default-free').setAttribute('aria-pressed', String(current?.providerId === '9router'));
+  $('#choose-default-paid').setAttribute('aria-pressed', String(Boolean(current && !current.providerId)));
+  if (!$('#default-paid-icon').childElementCount) $('#default-paid-icon').append(createOpenAIMark());
   // Provider setup must remain available before any account has loaded models.
   trigger.disabled = false;
   $('#model-picker-label').textContent = current?.name || (state.autoModelRouting ? 'GPT-6 unavailable' : state.account?.connected ? 'Models unavailable' : 'Connect Codex');
@@ -4918,6 +4981,12 @@ $('#anthropic-connect').addEventListener('click', () => { void connectAnthropic(
 $$('.provider-preset').forEach((button) => button.addEventListener('click', () => selectProviderPreset(button.dataset.providerPreset)));
 $('#omniroute-start').addEventListener('click', startOmniRoute);
 $('#omniroute-dashboard').addEventListener('click', openOmniRouteDashboard);
+$('#ninerouter-start').addEventListener('click', startNineRouter);
+$('#ninerouter-dashboard').addEventListener('click', openNineRouterDashboard);
+$('#provider-base-url').addEventListener('change', () => { if ($('#provider-native-preset').value === '9router') void refreshNineRouter(); });
+$('#provider-models').addEventListener('input', () => {
+  if ($('#provider-native-preset').value === '9router') updateNineRouterChoices($('#provider-models').value.split(/[\r\n,]+/).map((id) => id.trim()).filter(Boolean));
+});
 $('#provider-discover').addEventListener('click', discoverProviderModels);
 $('#provider-save').addEventListener('click', saveProvider);
 $('#provider-cancel-edit').addEventListener('click', resetProviderForm);
@@ -4929,10 +4998,7 @@ $('#provider-list').addEventListener('click', (event) => {
   else if (remove) void removeProvider(remove.dataset.providerRemove);
 });
 $('#effort-trigger').addEventListener('click', () => setEffortPopoverOpen($('#effort-trigger').getAttribute('aria-expanded') !== 'true'));
-$('#model-options').addEventListener('click', (event) => {
-  const option = event.target.closest('[data-model-id]');
-  if (!option) return;
-  const model = state.models.find((item) => item.id === option.dataset.modelId);
+function chooseModel(model) {
   if (!model) return;
   const targetProviderId = model.providerId || 'openai';
   const currentProviderId = state.threadProviderId || 'openai';
@@ -4944,11 +5010,30 @@ $('#model-options').addEventListener('click', (event) => {
   state.modelId = model.id;
   $('#model-select').value = model.id;
   localStorage.setItem('forge.model', model.id);
+  if (!model.providerId) localStorage.setItem('forge.default-paid-model', model.id);
   setModelPickerOpen(false, true);
   renderModelPicker();
   renderEfforts();
   updateModelRoutingUI();
   renderAccount();
+}
+$('#choose-default-free').addEventListener('click', () => {
+  const model = state.models.find((item) => item.providerId === '9router' && item.defaultFree);
+  if (model) { chooseModel(model); return; }
+  openProvidersDialog();
+  editProvider('9router');
+  showToast('Set up 9router and choose your free model combo to start.');
+});
+$('#choose-default-paid').addEventListener('click', () => {
+  const models = state.models.filter((item) => !item.providerId && /^gpt-6(?:\.1)?-/.test(item.id));
+  const remembered = localStorage.getItem('forge.default-paid-model');
+  const model = models.find((item) => item.id === remembered) || models.find((item) => item.isDefault) || findGpt6Model('luna') || models[0];
+  if (model) chooseModel(model);
+  else showToast('Connect your Codex account to load its models.');
+});
+$('#model-options').addEventListener('click', (event) => {
+  const option = event.target.closest('[data-model-id]');
+  if (option) chooseModel(state.models.find((item) => item.id === option.dataset.modelId));
 });
 $('#model-options').addEventListener('keydown', (event) => {
   const options = [...$('#model-options').querySelectorAll('[role="option"]:not([hidden])')];

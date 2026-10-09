@@ -1,13 +1,13 @@
 @font-face {
   font-family: "Anthropic Sans";
-  src: url("https://cdn.prod.website-files.com/67ce28cfec624e2b733f8a52/69971a00a3295036497e1a28_AnthropicSans-Roman-Web.woff2") format("woff2");
+  src: url("/fonts/anthropic-sans-roman.woff2") format("woff2");
   font-style: normal;
   font-weight: 300 800;
   font-display: swap;
 }
 @font-face {
   font-family: "Anthropic Sans";
-  src: url("https://cdn.prod.website-files.com/67ce28cfec624e2b733f8a52/69971a016067bf14b9b8f48d_AnthropicSans-Italic-Web.woff2") format("woff2");
+  src: url("/fonts/anthropic-sans-italic.woff2") format("woff2");
   font-style: italic;
   font-weight: 300 800;
   font-display: swap;
@@ -254,6 +254,15 @@ button { -webkit-tap-highlight-color: transparent; }
 .model-picker-heading { display: flex; align-items: center; justify-content: space-between; padding: 7px 9px 9px; color: var(--ink); font-size: calc(10px * var(--ui-scale)); font-weight: 650; }
 .model-picker-heading > span { display: inline-flex; align-items: baseline; gap: 6px; }
 .model-picker-heading small { color: var(--muted); font-size: calc(9px * var(--ui-scale)); font-weight: 500; }
+.provider-defaults { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin: 0 7px 9px; flex-shrink: 0; }
+.provider-defaults button { display: flex; align-items: center; gap: 8px; padding: 9px 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--field); color: var(--ink); text-align: left; cursor: pointer; transition: background .15s, border-color .15s; }
+.provider-defaults button:hover { background: var(--hover); border-color: var(--line-dark); }
+.provider-defaults button[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); }
+.provider-defaults strong, .provider-defaults small { display: block; }
+.provider-defaults strong { font-size: calc(11px * var(--ui-scale)); font-weight: 600; }
+.provider-defaults small { margin-top: 2px; color: var(--muted); font-size: calc(9px * var(--ui-scale)); }
+.provider-defaults .provider-default-icon { width: 20px; height: 20px; display: grid; place-items: center; font-weight: 650; color: var(--accent); }
+.provider-defaults svg { width: 20px; height: 20px; }
 .model-search-wrap { display: flex; align-items: center; height: 34px; margin: 0 4px 7px; padding: 0 9px; gap: 7px; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); background: var(--paper); transition: border-color .15s, box-shadow .15s, background .15s; }
 .model-search-wrap:focus-within { border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); background: var(--paper); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 7%, transparent); }
 .model-search-wrap svg { width: 15px; height: 15px; flex: 0 0 auto; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; }
