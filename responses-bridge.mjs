@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 
 // Documented free-plan coding models; discovery intersects this list with the
@@ -35,22 +35,50 @@ Give brief, concrete progress updates about your actual current action. Keep rea
 export function toChatRequest(input) {
   const toolMap = new Map();
   const tools = [];
-  function register(tool, namespace = '') {
-    if (tool.type === 'namespace') { for (const nested of tool.tools || []) register(nested, tool.name); return; }
+  const definitions = new Map();
+  const baseCounts = new Map();
+  const schemaKey = (value) => JSON.stringify(value, (_, part) => part && typeof part === 'object' && !Array.isArray(part)
+    ? Object.fromEntries(Object.keys(part).sort().map((key) => [key, part[key]])) : part);
+  function collect(tool, namespace = '') {
+    if (tool.type === 'namespace') { for (const nested of tool.tools || []) collect(nested, tool.name); return; }
     if (!['function', 'custom'].includes(tool.type)) throw new Error(`The Chat Completions adapter cannot translate the ${tool.type} hosted tool. Configure an MCP/function equivalent or use a provider endpoint that supports this tool.`);
     const source = tool.function || tool;
     const original = source.name;
-    if (!original) throw new Error('An inference tool has no name.');
-    const name = `${namespace ? namespace + '__' : ''}${original}`.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
-    if (toolMap.has(name)) throw new Error('Two tools have the same adapter name.');
-    toolMap.set(name, { name: original, namespace, custom: tool.type === 'custom' });
-    tools.push({ type: 'function', function: {
-      name, description: String(source.description || '').slice(0, 10000),
+    if (typeof original !== 'string' || !original) throw new Error('An inference tool has no name.');
+    const custom = tool.type === 'custom';
+    const identity = JSON.stringify([namespace, original, custom]);
+    const definition = {
+      description: String(source.description || '').slice(0, 10000),
       parameters: tool.type === 'custom' ? { type: 'object', properties: { input: { type: 'string', description: 'The exact free-form tool input.' } }, required: ['input'], additionalProperties: false } : source.parameters || { type: 'object', properties: {} },
       ...(typeof source.strict === 'boolean' ? { strict: source.strict } : {}),
-    } });
+    };
+    const signature = schemaKey({ parameters: definition.parameters, strict: definition.strict, ...(custom ? { format: source.format } : {}) });
+    const previous = definitions.get(identity);
+    if (previous) {
+      if (previous.signature !== signature) throw new Error(`Tool “${namespace ? namespace + '.' : ''}${original}” has conflicting definitions. Reconnect the plugin supplying it.`);
+      return;
+    }
+    const raw = `${namespace ? namespace + '__' : ''}${original}`;
+    const base = raw.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
+    definitions.set(identity, { identity, original, namespace, custom, raw, base, signature, definition });
+    baseCounts.set(base, (baseCounts.get(base) || 0) + 1);
   }
-  for (const tool of input.tools || []) register(tool);
+  for (const tool of input.tools || []) collect(tool);
+  // Reserve every readable name before assigning aliases, so naming does not
+  // depend on plugin order. Keep short unique names unchanged for compatibility.
+  for (const entry of definitions.values()) {
+    let name = entry.base;
+    if (entry.raw !== entry.base || baseCounts.get(entry.base) > 1) {
+      let attempt = 0;
+      do {
+        const suffix = createHash('sha256').update(entry.identity + (attempt ? `:${attempt}` : '')).digest('hex').slice(0, 12);
+        name = `${entry.base.slice(0, 51)}_${suffix}`;
+        attempt++;
+      } while (toolMap.has(name) || baseCounts.has(name));
+    }
+    toolMap.set(name, { name: entry.original, namespace: entry.namespace, custom: entry.custom });
+    tools.push({ type: 'function', function: { name, ...entry.definition } });
+  }
   // Unknown model families may lack Codex's native patch tool. Provide simple
   // file operations through its existing shell tool, retaining runtime approvals
   // and filesystem sandboxing rather than writing from this HTTP adapter.
@@ -81,10 +109,11 @@ export function toChatRequest(input) {
   function historyName(item) {
     if (typeof item.name !== 'string' || !item.name) throw new Error('A historical tool call has no name.');
     const namespace = item.namespace || '';
-    const matches = [...toolMap.entries()].filter(([, tool]) => tool.name === item.name && (!namespace || tool.namespace === namespace));
+    const custom = item.type === 'custom_tool_call';
+    const matches = [...toolMap.entries()].filter(([, tool]) => !tool.fileOperation && tool.custom === custom && tool.name === item.name && (!namespace || tool.namespace === namespace));
     const exact = matches.find(([, tool]) => tool.namespace === namespace);
     if (exact || !namespace && matches.length === 1) return (exact || matches[0])[0];
-    const identity = JSON.stringify([namespace, item.name]);
+    const identity = JSON.stringify([namespace, item.name, custom]);
     if (historicalNames.has(identity)) return historicalNames.get(identity);
     const base = `${namespace ? namespace + '__' : ''}${item.name}`.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
     let name = base, index = 0;
@@ -232,15 +261,18 @@ function translateToolChoice(choice, toolMap, hasTools) {
     }
     throw new Error(`The Chat Completions adapter cannot translate tool choice “${choice}”.`);
   }
-  const resolveName = (name, namespace = '') => {
-    if (toolMap.has(name)) return name;
-    const matches = [...toolMap.entries()].filter(([, tool]) => tool.name === name && (!namespace || tool.namespace === namespace));
+  const resolveName = (name, namespace = '', custom = false) => {
+    const matches = [...toolMap.entries()].filter(([, tool]) => !tool.fileOperation && tool.custom === custom && tool.name === name && (!namespace || tool.namespace === namespace));
+    const exact = matches.find(([, tool]) => tool.namespace === namespace);
+    if (exact) return exact[0];
     if (matches.length === 1) return matches[0][0];
     if (matches.length > 1) throw new Error(`Tool choice “${name}” is ambiguous across namespaces.`);
+    const alias = toolMap.get(name);
+    if (alias && alias.custom === custom && (!namespace || alias.namespace === namespace)) return name;
     throw new Error(`Tool choice “${name || '(unnamed)'}” is not present in this request.`);
   };
-  if (choice?.type === 'function') {
-    const chatName = resolveName(String(choice.name || choice.function?.name || ''), String(choice.namespace || ''));
+  if (['function', 'custom'].includes(choice?.type)) {
+    const chatName = resolveName(String(choice.name || choice.function?.name || ''), String(choice.namespace || ''), choice.type === 'custom');
     return { value: { type: 'function', function: { name: chatName } }, allowedNames: new Set([chatName]) };
   }
   if (choice?.type === 'allowed_tools') {
@@ -249,7 +281,7 @@ function translateToolChoice(choice, toolMap, hasTools) {
     const tools = Array.isArray(choice.tools) ? choice.tools : [];
     const allowedNames = new Set(tools.map((tool) => {
       if (!['function', 'custom'].includes(tool?.type)) throw new Error('Allowed tools must be function or custom tools.');
-      return resolveName(String(tool.name || tool.function?.name || ''), String(tool.namespace || ''));
+      return resolveName(String(tool.name || tool.function?.name || ''), String(tool.namespace || ''), tool.type === 'custom');
     }));
     if (!allowedNames.size && mode === 'required') throw new Error('This request requires a tool, but its allowed-tools list is empty.');
     return { value: allowedNames.size ? mode : undefined, allowedNames };
