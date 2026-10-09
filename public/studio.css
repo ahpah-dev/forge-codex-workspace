@@ -1,7 +1,7 @@
 /* A quieter studio: warm surfaces, editorial headings, and controls with room to breathe.
    Color and font settings still own every shared surface. */
 :root {
-  --font-editorial: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
+  --font-editorial: var(--font-ui);
   --studio-width: 720px;
 }
 
@@ -210,10 +210,10 @@ html[data-composer-shape="pill"] .has-conversation .send-button { width: 32px; h
 .has-conversation #prompt-input { font-size: calc(15px * var(--ui-scale)); }
 .has-conversation .composer-caption { display: none; }
 .conversation-scroll { width: min(800px, calc(100% - 48px)); padding-top: 18px; }
-.conversation-heading { display: flex; align-items: center; gap: 12px; margin-bottom: 36px; padding-bottom: 17px; border: 0; }
-.conversation-heading h2 { order: -1; margin: 0; font-family: var(--font-ui); font-weight: 500; font-size: calc(14px * var(--ui-scale)); letter-spacing: -.015em; line-height: 1.4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conversation-heading { display: flex; align-items: flex-start; gap: 16px; margin-bottom: 32px; padding-bottom: 12px; border: 0; }
+.conversation-heading h2 { order: -1; flex: 1; min-width: 0; margin: 0; font-family: var(--font-ui); font-weight: 600; font-size: calc(32px * var(--ui-scale)); letter-spacing: -.025em; line-height: 1.2; overflow-wrap: anywhere; text-wrap: pretty; }
 .conversation-kicker, .conversation-subtitle { display: none; }
-.conversation-head-row { margin-left: auto; }
+.conversation-head-row { flex: 0 0 auto; margin: 7px 0 0 auto; }
 .user-message { padding: 14px 18px 10px; border-color: transparent; border-radius: 14px; }
 .assistant-message { padding-inline: 2px; font-size: var(--chat-size); line-height: var(--chat-line-height); }
 .assistant-progress { padding-left: 0; border-color: transparent; background: transparent; box-shadow: none; }
@@ -228,6 +228,7 @@ html[data-composer-shape="pill"] .has-conversation .send-button { width: 32px; h
   .composer-usage { flex-basis: 100%; margin: 0 0 0 7px; padding: 0; border: 0; }
 }
 @container forge-main (max-width: 540px) {
+  .conversation-heading h2 { font-size: calc(26px * var(--ui-scale)); }
   .workspace-tool-tabs .topbar-button { width: 31px; padding: 0; justify-content: center; }
   .workspace-tool-tabs .topbar-button > span:not(.change-count) { display: none; }
   .welcome-hero { gap: 10px; }

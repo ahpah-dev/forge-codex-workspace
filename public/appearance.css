@@ -1,6 +1,8 @@
 /* All appearance controls use the same tokens as the workspace. */
 .settings-button { display: inline-grid; }
 .appearance-font-note { margin: 10px 0 16px; color: var(--muted); font-size: calc(11px * var(--ui-scale)); line-height: 1.6; }
+.appearance-font-status { margin: 10px 0 0; color: var(--muted); font-size: calc(11px * var(--ui-scale)); line-height: 1.6; }
+.appearance-font-status[data-state="error"] { color: var(--danger); }
 .settings-button:hover { color: var(--accent); }
 .topbar { height: 58px; border-bottom: 1px solid var(--line); background: var(--page); }
 .preview-label { height: 29px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); font-size: calc(11px * var(--ui-scale)); }

@@ -31,10 +31,11 @@
     graphite: { name: 'Graphite', colors: { ...baseColors, page: '#1c1f22', sidebar: '#151719', paper: '#25282b', field: '#1e2124', hover: '#303438', user: '#2b2f33', code: '#171a1d', ink: '#f0f1f2', muted: '#a6aaad', line: '#3a4045', accent: '#e09a78', onAccent: '#241912', brand: '#b4b8ec', success: '#91c7a0', danger: '#ee938a', astra: '#c7a3ea', sol: '#ebc27b', luna: '#b0c2ef', provider: '#c6a5e6', nvidia: '#afd080' } },
     midnight: { name: 'Midnight', colors: { ...baseColors, page: '#0d1220', sidebar: '#090e19', paper: '#151d2d', field: '#111929', hover: '#212d43', user: '#1a2840', code: '#0a1322', ink: '#eef2ff', muted: '#a1b0ca', line: '#293750', accent: '#aaa1ff', onAccent: '#17152b', brand: '#aaa1ff', success: '#83d5bc', danger: '#ffa0a0', astra: '#d0b5ff', sol: '#f0c878', luna: '#abcaff', provider: '#cfb5ff', nvidia: '#aada8b' } },
   };
-  const defaults = { version: 1, preset: 'linen', colors: { ...baseColors }, fonts: { ui: 'Anthropic Sans', chat: 'Anthropic Sans', code: 'Consolas' }, customFonts: { ui: '', chat: '', code: '' }, uiScale: 100, chatSize: 15, codeSize: 12, lineHeight: 1.7, pattern: 'none', composerShape: 'rounded', composerHeight: 0, composerHeights: { start: 0, 'follow-up': 0 } };
+  const defaults = { version: 2, preset: 'linen', colors: { ...baseColors }, fonts: { ui: 'Anthropic Sans', chat: 'Anthropic Sans', code: 'Consolas' }, customFonts: { ui: '', chat: '', code: '' }, uiScale: 100, chatSize: 15, codeSize: 12, lineHeight: 1.7, pattern: 'none', composerShape: 'rounded', composerHeight: 0, composerHeights: { start: 0, 'follow-up': 0 } };
   const fontChoices = ['system', 'Anthropic Sans', 'Segoe UI', 'Arial', 'Calibri', 'Verdana', 'Trebuchet MS', 'Georgia', 'Cambria', 'Times New Roman', 'Consolas', 'Cascadia Code', 'Courier New', 'custom', 'uploaded'];
   const fontSlots = [['ui', 'Interface font'], ['chat', 'Conversation font'], ['code', 'Code & terminal font']];
   const uploadedFonts = new Map();
+  let bundledFontStatus = 'loading';
   let settings = normalize(readSaved());
   let composerStage = 'start';
   let lastFocus = null;
@@ -48,6 +49,8 @@
     for (const [key] of colors) if (/^#[0-9a-f]{6}$/i.test(savedColors?.[key] || '')) result.colors[key] = savedColors[key].toLowerCase();
     for (const [slot] of fontSlots) {
       if (fontChoices.includes(input.fonts?.[slot])) result.fonts[slot] = input.fonts[slot];
+      // Earlier versions called the bundled Anthropic face "System default".
+      if (Number(input.version || 1) < 2 && slot !== 'code' && result.fonts[slot] === 'system') result.fonts[slot] = 'Anthropic Sans';
       if (typeof input.customFonts?.[slot] === 'string') result.customFonts[slot] = input.customFonts[slot].trim().slice(0, 100);
     }
     for (const [key, min, max] of [['uiScale', 85, 125], ['chatSize', 12, 22], ['codeSize', 10, 18], ['lineHeight', 1.35, 2]]) {
@@ -83,7 +86,7 @@
   function family(slot) {
     const selected = settings.fonts[slot];
     const fallback = slot === 'code' ? 'ui-monospace, Consolas, monospace' : 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif';
-    if (selected === 'system') return slot === 'code' ? fallback : `"Anthropic Sans", ${fallback}`;
+    if (selected === 'system') return fallback;
     if (selected === 'uploaded') return `${JSON.stringify(`ForgeUploaded${slot}`)}, ${fallback}`;
     const name = selected === 'custom' ? settings.customFonts[slot] : selected;
     return name ? `${JSON.stringify(name)}, ${fallback}` : fallback;
@@ -101,9 +104,9 @@
     root.style.setProperty('--code-size', `${settings.codeSize}px`);
     root.style.setProperty('--chat-line-height', settings.lineHeight);
     for (const [slot] of fontSlots) root.style.setProperty(`--font-${slot}`, family(slot));
-    // Custom interface fonts also apply to the welcome and session headings.
-    if (settings.fonts.ui === 'Anthropic Sans') root.style.removeProperty('--font-editorial');
-    else root.style.setProperty('--font-editorial', family('ui'));
+    // Headings follow the selected face, including the bundled Anthropic font.
+    root.style.setProperty('--font-editorial', family('ui'));
+    syncBundledFontStatus();
     const rgb = settings.colors.page.match(/[a-f0-9]{2}/gi).map((part) => parseInt(part, 16));
     const dark = (rgb[0] * .2126 + rgb[1] * .7152 + rgb[2] * .0722) < 128;
     root.style.colorScheme = dark ? 'dark' : 'light';
@@ -116,6 +119,29 @@
       window.ForgeDesktop.setTitleBarTheme(settings.colors.sidebar, settings.colors.ink).catch(() => {});
     }
     window.dispatchEvent(new Event('forge:appearance'));
+  }
+  function syncBundledFontStatus() {
+    const status = document.getElementById('appearance-font-status');
+    if (!status) return;
+    const selected = ['ui', 'chat'].some((slot) => settings.fonts[slot] === 'Anthropic Sans');
+    status.hidden = !selected;
+    status.dataset.state = bundledFontStatus;
+    status.textContent = bundledFontStatus === 'loaded'
+      ? 'Anthropic Sans · bundled locally, available offline'
+      : bundledFontStatus === 'error'
+        ? 'Anthropic Sans could not load. Reinstall the latest Forge installer to restore its bundled fonts.'
+        : 'Loading the bundled Anthropic Sans font…';
+  }
+  async function loadBundledFonts() {
+    try {
+      const faces = await Promise.all([
+        document.fonts.load('400 16px "Anthropic Sans"'),
+        document.fonts.load('600 32px "Anthropic Sans"'),
+        document.fonts.load('italic 400 16px "Anthropic Sans"'),
+      ]);
+      bundledFontStatus = faces.every((loaded) => loaded.length > 0) ? 'loaded' : 'error';
+    } catch { bundledFontStatus = 'error'; }
+    syncBundledFontStatus();
   }
   function save() {
     apply();
@@ -282,7 +308,7 @@
   };
   apply();
   document.addEventListener('DOMContentLoaded', () => {
-    renderControls(); void restoreFonts();
+    renderControls(); void restoreFonts(); void loadBundledFonts();
     document.getElementById('appearance-close').addEventListener('click', close);
     document.getElementById('appearance-done').addEventListener('click', close);
     document.getElementById('theme-reset').addEventListener('click', () => { settings = normalize(defaults); save(); syncControls(); });
