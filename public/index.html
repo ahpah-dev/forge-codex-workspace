@@ -279,6 +279,7 @@
           <button class="provider-preset" data-provider-preset="omniroute" type="button"><span class="provider-preset-mark omni-mark">O</span><span>OmniRoute Local</span></button>
           <button class="provider-preset" data-provider-preset="custom" type="button"><span class="provider-preset-mark custom-mark">＋</span><span>Custom</span></button>
         </div>
+        <div id="provider-connection-fields">
         <label class="dialog-field"><span>Provider name</span><input id="provider-name" type="text" maxlength="48" autocomplete="off" placeholder="My inference endpoint"></label>
         <label class="dialog-field"><span>API base URL</span><input id="provider-base-url" type="url" spellcheck="false" autocomplete="off" placeholder="https://openrouter.ai/api/v1"></label>
         <label class="dialog-field"><span>API format</span><select id="provider-api-format"><option value="auto">Automatic · NVIDIA / OpenRouter / Groq use Chat Completions</option><option value="chat">Chat Completions</option><option value="responses">Responses API</option></select></label>
@@ -287,14 +288,16 @@
         <div class="provider-protocol-note" id="provider-protocol-note">NVIDIA, OpenRouter, and Groq are detected automatically. Choose a model with tool calling support for coding tasks.</div>
         <div class="provider-protocol-note" id="groq-setup-note" hidden>Free-plan coding models · API key required. <a href="https://console.groq.com/keys" target="_blank" rel="noopener noreferrer">Get a Groq key ↗</a> · <a href="https://console.groq.com/docs/rate-limits" target="_blank" rel="noopener noreferrer">View limits ↗</a><br>Groq's free plan has token and request limits. Large projects or long chats may exceed them. A paid Groq account follows its own billing; Forge cannot determine your plan from the model catalog.</div>
         <div class="provider-protocol-note" id="kilo-setup-note" hidden>Hosted automatic routing · one Kilo key. <a href="https://app.kilo.ai/" target="_blank" rel="noopener noreferrer">Get your key ↗</a> from Your Profile → bottom of page.<br>This preset uses only <code>kilo-auto/free</code>. Kilo chooses from its currently available free models; rate limits and availability apply. Auto Free may send code to providers that log prompts for service improvement. <a href="https://kilo.ai/docs/getting-started/using-kilo-for-free" target="_blank" rel="noopener noreferrer">Free route and data terms ↗</a></div>
+        </div>
         <div class="dialog-error" id="provider-error" hidden></div>
         <div class="omniroute-setup" id="ninerouter-setup" hidden>
           <div class="omniroute-heading"><span class="provider-preset-mark omni-mark">9</span><div><strong>9router · Default free provider</strong><small id="ninerouter-status" role="status">Checking connection…</small></div></div>
-          <p>Forge can install and run 9router locally. Already running it? Set your existing local API address above. Codex stays connected as your default paid provider.</p>
-          <p>In the dashboard, connect your free providers and create a combo containing only free models with tool calling. Create a gateway API key and paste it above, then load models to import your coding combos. Individual model IDs can also be entered manually. Your first download may take a few minutes.</p>
-          <p>9router can also connect paid services. Choose your free combo below deliberately; quotas and upstream billing follow the providers configured in its dashboard.</p>
-          <div class="omniroute-actions"><button class="quiet-button" id="ninerouter-start" type="button">Install &amp; start</button><a class="quiet-button" id="ninerouter-dashboard" href="http://127.0.0.1:20129/dashboard" target="_blank" rel="noopener noreferrer">Open dashboard ↗</a></div>
-          <label class="dialog-field"><span>Default free model / combo <small>Must match one of your model IDs</small></span><input id="provider-default-free-model" type="text" list="ninerouter-model-choices" spellcheck="false" autocomplete="off" placeholder="Your free combo name"><datalist id="ninerouter-model-choices"></datalist></label>
+          <p>Connect once. Forge installs and starts the router, handles its connection key, and creates a free route using your saved Kilo, Groq, OpenRouter or NVIDIA connections. Codex stays signed in.</p>
+          <div class="omniroute-actions"><button class="primary-button" id="ninerouter-start" type="button">Connect &amp; load models</button><a class="quiet-button" id="ninerouter-dashboard" href="http://127.0.0.1:20129/dashboard" target="_blank" rel="noopener noreferrer">Open dashboard ↗</a></div>
+          <div class="ninerouter-model-summary" id="ninerouter-model-summary" role="status" hidden></div>
+          <label class="dialog-field"><span>Preferred free model <small>Saved automatically</small></span><select id="provider-default-free-model" aria-label="Preferred 9router model"><option value="">Connect to load models</option></select></label>
+          <div class="ninerouter-secondary"><button class="quiet-button" id="ninerouter-use" type="button" disabled>Use 9router</button><button class="provider-manage-link" id="ninerouter-advanced" type="button" aria-expanded="false" aria-controls="provider-connection-fields">Advanced connection</button></div>
+          <p class="ninerouter-quota-note">Need an upstream? Add its key using a provider preset above, then reconnect. You can also connect accounts in the dashboard. Models follow their provider's quotas and billing; only choose free routes for free usage.</p>
         </div>
         <div class="omniroute-setup" id="omniroute-setup" hidden>
           <div class="omniroute-heading"><span class="provider-preset-mark omni-mark">O</span><div><strong>Your local AI router</strong><small id="omniroute-status" role="status">Checking connection…</small></div></div>

@@ -14,8 +14,9 @@ import { bridgeResponses, createChatProviderRouter, providerApiFormat, providerB
 import { browserCodexConfig, browserCodexArgs, computerUseInstructions } from './browser-config.mjs';
 import { createOmniRouteManager, isLocalOmniRoute, OMNIROUTE_BASE_URL } from './omniroute-manager.mjs';
 import { createOmniRouteRouting, omniRouteFallbacks } from './omniroute-routing.mjs';
-import { createOmniRouteSync } from './omniroute-sync.mjs';
+import { createOmniRouteSync, createGatewaySync } from './omniroute-sync.mjs';
 import { createNineRouterManager, defaultNineRouter, isLocalNineRouter, NINEROUTER_BASE_URL, NINEROUTER_PROVIDER_ID } from './ninerouter-manager.mjs';
+import { nineRouterCatalog } from './ninerouter-catalog.mjs';
 import './public/question-protocol.js';
 import './public/plugin-protocol.js';
 import './public/file-paths.js';
@@ -797,6 +798,59 @@ const omniSync = createOmniRouteSync({ manager: omniRoute, token: bridgeToken,
   },
 });
 
+const nineSync = createGatewaySync({ manager: nineRouter, token: bridgeToken, upstreamPath: 'nine-upstreams', comboName: 'forge-auto-free', routerName: '9router',
+  baseUrl: () => `http://${host}:${port}`,
+  getCandidates: async () => {
+    const keys = await readEncryptedProviderKeys(providerKeysPath);
+    return omniRouteFallbacks(settings.providers, id => Boolean(keys[id]), id => decryptProviderKey(keys[id]));
+  },
+});
+
+let nineConnecting = null;
+async function connectNineRouter(input = {}) {
+  // Coalesce automatic refresh/poll requests without sharing the keys or results
+  // of a separately entered custom connection.
+  const existing = settings.providers.find((item) => item.id === (input.id || NINEROUTER_PROVIDER_ID));
+  const baseUrl = normalizeProviderBaseUrl(input.baseUrl || existing?.baseUrl || NINEROUTER_BASE_URL);
+  if (!isLocalNineRouter({ nativePreset: '9router', baseUrl })) throw new Error('Use a local 9router API address.');
+  const keys = await readEncryptedProviderKeys(providerKeysPath);
+  let key = String(input.apiKey || '').trim() || (keys[existing?.id] ? await decryptProviderKey(keys[existing.id]) : '');
+  let managed = false, managedRoute = '', connected = true;
+  if (baseUrl === NINEROUTER_BASE_URL) {
+    if (!(await nineRouter.status()).running) await nineRouter.start();
+    managed = (await nineRouter.status()).managed;
+    if (managed) {
+      // Authenticate and synchronize only the process we own. Upstream keys stay
+      // in Forge; the gateway receives a local proxy token instead.
+      key = await nineRouter.ensureKey();
+      managedRoute = await nineSync.configure() || '';
+      const connections = (await nineRouter.management('providers')).connections || [];
+      connected = connections.some((item) => item.isActive !== false);
+    }
+  }
+  let payload = {};
+  if (connected) {
+    const response = await fetch(`${baseUrl}/models`, { headers: { Accept: 'application/json', ...(key ? { Authorization: `Bearer ${key}` } : {}) }, signal: AbortSignal.timeout(60000) });
+    if (!response.ok) throw new Error([401, 403].includes(response.status) ? 'This existing gateway needs its API key. Paste it in Advanced connection, then reconnect.' : `9router model discovery returned HTTP ${response.status}.`);
+    payload = await response.json();
+  }
+  const rows = Array.isArray(payload.data) ? payload.data : Array.isArray(payload.models) ? payload.models : [];
+  const catalog = nineRouterCatalog(rows, { connected, managedRoute, previousDefault: existing?.defaultFreeModel });
+  if (managedRoute && !catalog.modelIds.includes(managedRoute)) throw new Error('9router created the free route but has not exposed it yet. Retry Connect & refresh.');
+  if (key && existing && (input.apiKey || managed)) { keys[existing.id] = await encryptProviderKey(key); await writeEncryptedProviderKeys(providerKeysPath, keys); }
+  if (existing && input.save !== false) {
+    const provider = { ...existing, baseUrl, apiFormat: 'chat', nativePreset: '9router', models: catalog.models.map(({ id, name }) => ({ id, name })), defaultFreeModel: catalog.defaultFreeModel };
+    settings.providers = settings.providers.map((item) => item.id === existing.id ? provider : item);
+    await saveSettings();
+  }
+  return { ...catalog, managed, connected, saved: input.save !== false && Boolean(existing), managedRoute,
+    message: catalog.models.length ? `${catalog.models.length} models ready${managedRoute ? ' · automatic free route configured' : ''}` : 'Add a Kilo, Groq, OpenRouter or NVIDIA key in Forge, or connect a provider in the 9router dashboard. Then reconnect.' };
+}
+function refreshManagedNineRouter() {
+  if (!nineConnecting) nineConnecting = connectNineRouter().finally(() => { nineConnecting = null; });
+  return nineConnecting;
+}
+
 function freeRoutingStatus(keys) {
   return { ...settings.freeRouting, openrouterConfigured: Boolean(keys[FREE_KEY_IDS.openrouter]), nvidiaConfigured: Boolean(keys[FREE_KEY_IDS.nvidia]), ...freeRouter.status() };
 }
@@ -1401,7 +1455,7 @@ async function handleApi(req, res, url) {
         settings.freeRouting = { enabled, codexFallback: enabled && input.codexFallback === true };
         await saveSettings();
         freeRouter.reset();
-        omniRouting.reset(); omniSync.reset();
+        omniRouting.reset(); omniSync.reset(); nineSync.reset();
         initialAppState = null;
         return json(res, 200, { freeRouting: freeRoutingStatus(keys), providers: publicProviders(keys) });
       }
@@ -1420,6 +1474,19 @@ async function handleApi(req, res, url) {
         nineRouter.installAndStart();
         return json(res, 202, await nineRouter.status());
       }
+      if (route === '/api/9router/connect') {
+        const custom = Boolean(input.apiKey || input.id && input.id !== NINEROUTER_PROVIDER_ID || input.baseUrl && input.baseUrl !== NINEROUTER_BASE_URL);
+        return json(res, 200, await (custom ? connectNineRouter(input) : refreshManagedNineRouter()));
+      }
+      if (route === '/api/9router/default') {
+        const id = String(input.id || NINEROUTER_PROVIDER_ID);
+        const provider = settings.providers.find((item) => item.id === id && item.nativePreset === '9router');
+        const model = String(input.model || '').trim();
+        if (!provider || !provider.models.some((item) => item.id === model)) throw new Error('Refresh 9router models before selecting this preference.');
+        settings.providers = settings.providers.map((item) => item.id === id ? { ...item, defaultFreeModel: model } : item);
+        await saveSettings();
+        return json(res, 200, { defaultFreeModel: model });
+      }
       if (route === '/api/9router/dashboard') {
         const baseUrl = normalizeProviderBaseUrl(input.baseUrl || NINEROUTER_BASE_URL);
         if (!isLocalNineRouter({ nativePreset: '9router', baseUrl })) throw new Error('Use a local 9router address.');
@@ -1434,16 +1501,14 @@ async function handleApi(req, res, url) {
         const baseUrl = normalizeProviderBaseUrl(input.baseUrl || OMNIROUTE_BASE_URL);
         if (!isLocalOmniRoute({nativePreset:'omniroute',baseUrl})) throw new Error('Use a local OmniRoute address.');
         if (baseUrl === OMNIROUTE_BASE_URL && !(await omniRoute.status()).running) await omniRoute.start();
-        omniRouting.reset(); omniSync.reset();
+        omniRouting.reset(); omniSync.reset(); nineSync.reset();
         return json(res, 200, {url:new URL('/dashboard',baseUrl).href});
       }
       if (route === '/api/providers/discover') {
         const baseUrl = normalizeProviderBaseUrl(input.baseUrl);
+        if (input.nativePreset === '9router') return json(res, 200, { ...await connectNineRouter({ ...input, baseUrl }), replaceModels: true });
         const kiloFree = input.nativePreset === 'kilo-free';
         const localOmni = isLocalOmniRoute({ nativePreset: input.nativePreset, baseUrl });
-        const localNine = isLocalNineRouter({ nativePreset: input.nativePreset, baseUrl });
-        if (input.nativePreset === '9router' && !localNine) throw new Error('Native 9router must use a loopback HTTP address.');
-        if (localNine && baseUrl === NINEROUTER_BASE_URL && !(await nineRouter.status()).running) await nineRouter.start();
         if (input.nativePreset === 'omniroute' && !localOmni) throw new Error('Local OmniRoute must use a loopback HTTP address.');
         if (kiloFree && baseUrl !== KILO_FREE_BASE_URL) throw new Error('Kilo Free Router requires the official Kilo gateway endpoint.');
         let apiKey = String(input.apiKey || '').trim();
@@ -1452,25 +1517,20 @@ async function handleApi(req, res, url) {
           const encrypted = encryptedKeys[String(input.id)];
           if (encrypted) apiKey = await decryptProviderKey(encrypted);
         }
-        if (!apiKey && !localOmni && !localNine) throw new Error('Enter the provider API key before loading models.');
+        if (!apiKey && !localOmni) throw new Error('Enter the provider API key before loading models.');
         const response = await fetch(`${baseUrl}/models`, {
           headers: { ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}), Accept: 'application/json' },
           signal: AbortSignal.timeout(15000),
         });
-        if (!response.ok) throw new Error(localNine && [401, 403].includes(response.status) ? 'Create an API key in the 9router dashboard and paste it here, then load models again.' : `The provider model list returned HTTP ${response.status}. Check the endpoint and API key.`);
+        if (!response.ok) throw new Error(`The provider model list returned HTTP ${response.status}. Check the endpoint and API key.`);
         const payload = await response.json();
         const rows = Array.isArray(payload?.data) ? payload.data : Array.isArray(payload?.models) ? payload.models : [];
-        // An unconfigured 9router can publish its entire static provider catalog.
-        // Discover actual user-created coding routes, not that unavailable fallback list.
-        // Individual model IDs remain supported through manual configuration.
-        const eligibleRows = localNine ? rows.filter((model) => model.owned_by === 'combo' && (!model.kind || model.kind === 'llm') && model.capabilities?.tools !== false) : rows;
-        const comboIds = new Set(eligibleRows.filter((model) => model.owned_by === 'combo').map((model) => model.id));
-        const availableIds = [...new Set(eligibleRows.filter((model) => model?.active !== false).map((model) => String(model?.id || model?.name || '').trim()).filter((id) => /^[\w./:@+-]{1,180}$/.test(id)))].sort((a, b) => localNine ? Number(comboIds.has(b)) - Number(comboIds.has(a)) : localOmni ? Number(b.startsWith('auto')) - Number(a.startsWith('auto')) : 0).slice(0, 100);
+        const availableIds = [...new Set(rows.filter((model) => model?.active !== false).map((model) => String(model?.id || model?.name || '').trim()).filter((id) => /^[\w./:@+-]{1,180}$/.test(id)))].sort((a, b) => localOmni ? Number(b.startsWith('auto')) - Number(a.startsWith('auto')) : 0).slice(0, 100);
         const codingOnly = kiloFree || isGroqProvider({ baseUrl });
         const freeAlias = rows.find((model) => model?.id === KILO_FREE_MODEL);
         const freePrice = freeAlias?.pricing && ['prompt', 'completion'].every((field) => freeAlias.pricing[field] != null && String(freeAlias.pricing[field]).trim() !== '' && Number(freeAlias.pricing[field]) === 0);
         const modelIds = kiloFree ? (freePrice && freeAlias.supported_parameters?.includes('tools') ? [KILO_FREE_MODEL] : []) : codingOnly ? GROQ_CODING_MODELS.filter((id) => availableIds.includes(id)) : availableIds;
-        if (!modelIds.length) throw new Error(localNine ? 'Connect a free provider and create a coding combo in the 9router dashboard, then load models again.' : kiloFree ? 'Kilo Auto Free is not currently listed as a zero-price tool-capable route. Try again later; no paid route will be added.' : 'The provider returned no model IDs. Add model IDs manually.');
+        if (!modelIds.length) throw new Error(kiloFree ? 'Kilo Auto Free is not currently listed as a zero-price tool-capable route. Try again later; no paid route will be added.' : 'The provider returned no model IDs. Add model IDs manually.');
         return json(res, 200, { modelIds, codingOnly });
       }
       if (route === '/api/providers/save') {
@@ -1500,15 +1560,16 @@ async function handleApi(req, res, url) {
         if (apiKey) encryptedKeys[id] = await encryptProviderKey(apiKey);
         if (!encryptedKeys[id] && !localOmni && !localNine) throw new Error('Enter an API key for this provider.');
         const apiFormat = ['auto', 'chat', 'responses'].includes(input.apiFormat) ? input.apiFormat : 'auto';
-        const defaultFreeModel = String(input.defaultFreeModel || '').trim();
-        if (id === NINEROUTER_PROVIDER_ID && !models.some((model) => model.id === defaultFreeModel)) throw new Error('Choose a default free model or combo from the model IDs you added.');
+        let defaultFreeModel = String(input.defaultFreeModel || '').trim();
+        if (id === NINEROUTER_PROVIDER_ID && !defaultFreeModel && models.some((model) => model.id === 'forge-auto-free')) defaultFreeModel = 'forge-auto-free';
+        if (id === NINEROUTER_PROVIDER_ID && defaultFreeModel && !models.some((model) => model.id === defaultFreeModel)) throw new Error('Choose a default free model from the loaded models.');
         const provider = { id, name, baseUrl, models, apiFormat: nativePreset ? 'chat' : apiFormat, ...(nativePreset ? { nativePreset } : {}), ...(id === NINEROUTER_PROVIDER_ID ? { defaultFreeModel } : {}) };
         await writeEncryptedProviderKeys(providerKeysPath, encryptedKeys);
         settings.providers = existing
           ? settings.providers.map((item) => item.id === id ? provider : item)
           : [...settings.providers, provider];
         await saveSettings();
-        omniRouting.reset(); omniSync.reset();
+        omniRouting.reset(); omniSync.reset(); nineSync.reset();
         return json(res, 200, { provider: { ...provider, authConfigured: true } });
       }
       if (route === '/api/providers/remove') {
@@ -1520,7 +1581,7 @@ async function handleApi(req, res, url) {
         await writeEncryptedProviderKeys(providerKeysPath, encryptedKeys);
         settings.providers = settings.providers.filter((provider) => provider.id !== id);
         await saveSettings();
-        omniRouting.reset(); omniSync.reset();
+        omniRouting.reset(); omniSync.reset(); nineSync.reset();
         return json(res, 200, { providers: publicProviders(encryptedKeys) });
       }
       if (route === '/api/login/start') {
@@ -1721,15 +1782,16 @@ const httpServer = createServer(async (req, res) => {
       res.removeListener('close', cancel);
     }
   }
-  const upstream = url.pathname.match(/^\/internal\/omni-upstreams\/([a-f0-9]{16})\/v1\/(models|chat\/completions)$/);
+  const upstream = url.pathname.match(/^\/internal\/(omni|nine)-upstreams\/([a-f0-9]{16})\/v1\/(models|chat\/completions)$/);
   if (upstream) {
+    const sync = upstream[1] === 'nine' ? nineSync : omniSync;
     if (req.headers.authorization !== `Bearer ${bridgeToken}` || req.headers.origin) return json(res, 403, { error: { message: 'Invalid local upstream session.' } });
-    if (!omniSync.has(upstream[1])) return json(res, 404, { error: { message: 'Free upstream no longer configured.' } });
-    if (upstream[2] === 'models' && req.method === 'GET') return json(res, 200, { object: 'list', data: [{ id: 'free', object: 'model', owned_by: 'forge' }] });
-    if (req.method !== 'POST' || upstream[2] !== 'chat/completions') return json(res, 405, { error: { message: 'Method not allowed.' } });
+    if (!sync.has(upstream[2])) return json(res, 404, { error: { message: 'Free upstream no longer configured.' } });
+    if (upstream[3] === 'models' && req.method === 'GET') return json(res, 200, { object: 'list', data: [{ id: 'free', object: 'model', owned_by: 'forge' }] });
+    if (req.method !== 'POST' || upstream[3] !== 'chat/completions') return json(res, 405, { error: { message: 'Method not allowed.' } });
     const controller = new AbortController(); res.once('close', () => controller.abort());
     try {
-      const opened = await omniSync.open(upstream[1], await bodyJson(req), controller.signal);
+      const opened = await sync.open(upstream[2], await bodyJson(req), controller.signal);
       res.writeHead(opened.response.status, { 'Content-Type': opened.response.headers.get('content-type') || 'text/event-stream', 'Cache-Control': 'no-cache' });
       for await (const bytes of opened.response.body) {
         if (controller.signal.aborted) break;
@@ -1739,7 +1801,7 @@ const httpServer = createServer(async (req, res) => {
         });
       }
       res.end();
-    } catch (error) { if (!res.headersSent) json(res, Number(error.status) || 502, { error: { message: 'Free upstream unavailable. OmniRoute can try another connected route.' } }); else res.end(); }
+    } catch (error) { if (!res.headersSent) json(res, Number(error.status) || 502, { error: { message: `Free upstream unavailable. ${upstream[1] === 'nine' ? '9router' : 'OmniRoute'} can try another connected route.` } }); else res.end(); }
     return;
   }
   const providerBridge = url.pathname.match(/^\/internal\/providers\/([a-z0-9_-]+)\/responses$/);
@@ -1760,7 +1822,13 @@ const httpServer = createServer(async (req, res) => {
         const key = keys[provider.id] ? await decryptProviderKey(keys[provider.id]) : '';
         if (!key && !isLocalOmniRoute(provider) && !isLocalNineRouter(provider)) throw new Error(`Add your ${provider.name} API key in Settings.`);
         const normalizedProvider = { ...provider, baseUrl:normalizeProviderBaseUrl(provider.baseUrl) };
-        if (isLocalNineRouter(normalizedProvider) && normalizedProvider.baseUrl === NINEROUTER_BASE_URL && !(await nineRouter.status()).running) await nineRouter.start();
+        if (isLocalNineRouter(normalizedProvider) && normalizedProvider.baseUrl === NINEROUTER_BASE_URL) {
+          if (!(await nineRouter.status()).running) await nineRouter.start();
+          if (input.model === 'forge-auto-free') {
+            const route = await nineSync.configure();
+            if (!route) throw new Error('Add or update a free provider key in Forge, then reconnect 9router.');
+          }
+        }
         const active = [...turnRequests.values()].filter(request => request.providerId === provider.id);
         router = isLocalOmniRoute(normalizedProvider) ? omniRouting.forProvider({provider:normalizedProvider,model:input.model,key,scopeId:requestThreadId || (active.length===1?active[0].threadId:'default'),ensureGateway:async()=>{
           if (normalizedProvider.baseUrl !== OMNIROUTE_BASE_URL) return;
@@ -1768,6 +1836,9 @@ const httpServer = createServer(async (req, res) => {
           if (!status.running) await omniRoute.start();
           if (/^auto(?:\/[\w-]+)?:free$/.test(input.model) || input.model==='auto/best-free') return await omniSync.configure();
         }}) : createChatProviderRouter({ provider: normalizedProvider, model: input.model, key });
+        if (isLocalNineRouter(normalizedProvider) && input.model === 'forge-auto-free') {
+          router.toolLimit = 32; router.toolSchemaBudget = 5000;
+        }
       }
       await bridgeResponses({ input, res, router, signal: AbortSignal.any([controller.signal, AbortSignal.timeout(600000)]) });
     } catch (error) {

@@ -639,6 +639,13 @@ button { -webkit-tap-highlight-color: transparent; }
 .omniroute-heading small { display: block; margin-top: 4px; color: var(--muted); font-size: calc(10px * var(--ui-scale)); }
 .omniroute-setup p { margin: 10px 0; color: var(--muted); font-size: calc(10px * var(--ui-scale)); line-height: 1.6; }
 .omniroute-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+#provider-connection-fields[hidden] { display: none; }
+#ninerouter-setup { margin-top: 14px; }
+#ninerouter-setup .dialog-field { margin-top: 15px; }
+.ninerouter-secondary { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 11px; }
+.ninerouter-model-summary { margin-top: 14px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; color: var(--success); background: var(--paper); font-size: calc(11px * var(--ui-scale)); line-height: 1.5; }
+.ninerouter-model-summary[hidden] { display: none; }
+#ninerouter-setup .ninerouter-quota-note { margin-top: 14px; font-size: calc(9px * var(--ui-scale)); }
 .omniroute-actions .quiet-button { min-height: 32px; font-size: calc(10px * var(--ui-scale)); }
 .omniroute-setup[data-busy="true"] .omni-mark { animation: gpt-mark-spin 1.7s linear infinite; }
 @media (max-width: 520px) { .provider-presets { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

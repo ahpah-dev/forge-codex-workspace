@@ -394,7 +394,11 @@ function resetProviderForm() {
   $('#omniroute-setup').hidden = true;
   $('#ninerouter-setup').hidden = true;
   $('#provider-default-free-model').value = '';
-  $('#ninerouter-model-choices').replaceChildren();
+  $('#provider-default-free-model').replaceChildren(new Option('Connect to load models', ''));
+  $('#provider-connection-fields').hidden = false;
+  $('#ninerouter-advanced').setAttribute('aria-expanded', 'false');
+  $('#provider-save').hidden = false;
+  ninePendingConnect = false;
   $('#provider-id').value = '';
   $('#provider-native-preset').value = '';
   $('#provider-models').readOnly = false;
@@ -551,6 +555,9 @@ async function connectAnthropic() {
 function selectProviderPreset(preset) {
   if (preset === '9router') { editProvider('9router'); return; }
   $('#ninerouter-setup').hidden = true;
+  $('#provider-connection-fields').hidden = false;
+  $('#provider-save').hidden = false;
+  ninePendingConnect = false;
   $$('.provider-preset').forEach((button) => button.classList.toggle('selected', button.dataset.providerPreset === preset));
   const presets = {
     openrouter: { name: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1', placeholder: 'sk-or-…' },
@@ -590,8 +597,12 @@ function editProvider(providerId) {
   $('#provider-native-preset').value = provider.nativePreset || '';
   const nine = provider.nativePreset === '9router';
   $('#ninerouter-setup').hidden = !nine;
-  $('#provider-default-free-model').value = provider.defaultFreeModel || '';
-  updateNineRouterChoices(provider.models.map((model) => model.id));
+  $('#provider-connection-fields').hidden = nine;
+  $('#provider-save').hidden = nine;
+  $('#ninerouter-advanced').setAttribute('aria-expanded', 'false');
+  updateNineRouterChoices(provider.models, provider.defaultFreeModel || '');
+  $('#ninerouter-model-summary').hidden = !provider.models.length;
+  $('#ninerouter-model-summary').textContent = provider.models.length ? `${provider.models.length} saved models · Connect & refresh updates availability` : '';
   $('#omniroute-setup').hidden = provider.nativePreset !== 'omniroute';
   if (provider.nativePreset === 'omniroute') void refreshOmniRoute();
   $('#provider-models').readOnly = kiloFree;
@@ -616,35 +627,87 @@ function editProvider(providerId) {
   $('#provider-name').focus();
 }
 
-function updateNineRouterChoices(ids) {
-  $('#ninerouter-model-choices').replaceChildren(...ids.map((id) => new Option(id, id)));
+function updateNineRouterChoices(models, selected = $('#provider-default-free-model').value) {
+  const choices = models.map((model) => typeof model === 'string' ? { id: model, name: model } : model);
+  $('#provider-default-free-model').replaceChildren(new Option(choices.length ? 'Choose your free model or automatic route' : 'Connect to load models', ''), ...choices.map((model) => new Option(model.id === 'forge-auto-free' ? 'Auto · saved free providers' : model.name || model.id, model.id)));
+  $('#provider-default-free-model').value = choices.some((model) => model.id === selected) ? selected : '';
+  $('#provider-default-free-model').disabled = !choices.length;
+  $('#ninerouter-use').disabled = !$('#provider-default-free-model').value;
 }
-let nineRouterPoll;
+let nineRouterPoll, ninePendingConnect = false, nineConnectPromise = null;
 async function refreshNineRouter() {
   clearTimeout(nineRouterPoll);
   if ($('#ninerouter-setup').hidden || $('#providers-modal').hidden) return;
   const button = $('#ninerouter-start');
+  const requestedBaseUrl = $('#provider-base-url').value;
   const managed = $('#provider-base-url').value.trim().replace(/\/$/, '') === 'http://127.0.0.1:20129/v1';
   if (!managed) {
-    $('#ninerouter-status').textContent = 'Using your existing local gateway · load models to connect';
-    button.hidden = true;
+    $('#ninerouter-status').textContent = 'Existing gateway · Connect & load models';
+    button.hidden = false;
+    button.disabled = Boolean(nineConnectPromise);
+    button.textContent = 'Connect & load models';
     return;
   }
   button.hidden = false;
   try {
     const status = await api('/api/9router');
+    if ($('#ninerouter-setup').hidden || $('#providers-modal').hidden || $('#provider-base-url').value !== requestedBaseUrl) return;
     const busy = ['installing', 'starting'].includes(status.phase);
-    $('#ninerouter-status').textContent = status.running ? 'Gateway ready · configure providers in its dashboard' : status.error || (status.phase === 'installing' ? 'Downloading and installing 9router…' : status.phase === 'starting' ? 'Starting your local gateway…' : status.installed ? 'Installed · ready to start' : 'Not installed yet');
-    button.disabled = busy || status.running;
-    button.textContent = status.running ? 'Running' : busy ? status.phase === 'installing' ? 'Installing…' : 'Starting…' : status.installed ? 'Start router' : 'Install & start';
+    $('#ninerouter-status').textContent = status.running ? 'Gateway ready · Connect & refresh loads your models' : status.error || (status.phase === 'installing' ? 'Downloading and installing 9router…' : status.phase === 'starting' ? 'Starting your local gateway…' : status.installed ? 'Ready to connect' : 'Connect installs the router automatically');
+    button.disabled = busy || Boolean(nineConnectPromise);
+    button.textContent = busy ? status.phase === 'installing' ? 'Installing…' : 'Starting…' : status.running ? 'Connect & refresh' : 'Connect & load models';
     if (busy) nineRouterPoll = setTimeout(refreshNineRouter, 2000);
+    else if (status.running && ninePendingConnect) { ninePendingConnect = false; await loadNineRouterModels(); }
   } catch (error) { $('#ninerouter-status').textContent = error.message; button.disabled = false; }
 }
 async function startNineRouter() {
   $('#ninerouter-start').disabled = true;
   $('#ninerouter-status').textContent = 'Preparing 9router…';
-  try { await api('/api/9router/start', { method: 'POST', body: {} }); await refreshNineRouter(); }
+  try {
+    const managed = $('#provider-base-url').value.trim().replace(/\/$/, '') === 'http://127.0.0.1:20129/v1';
+    if (!managed) { await loadNineRouterModels(); return; }
+    ninePendingConnect = true;
+    await api('/api/9router/start', { method: 'POST', body: {} });
+    await refreshNineRouter();
+  }
   catch (error) { $('#ninerouter-status').textContent = error.message; $('#ninerouter-start').disabled = false; }
+}
+async function loadNineRouterModels() {
+  if (nineConnectPromise) return nineConnectPromise;
+  const baseUrl = $('#provider-base-url').value;
+  const visible = () => !$('#ninerouter-setup').hidden && $('#provider-base-url').value === baseUrl;
+  const button = $('#ninerouter-start');
+  button.disabled = true; button.textContent = 'Connecting…';
+  $('#ninerouter-status').textContent = 'Connecting gateway · syncing saved providers · loading models…';
+  showProviderError('');
+  nineConnectPromise = (async () => {
+    const result = await api('/api/9router/connect', { method: 'POST', body: { id: $('#provider-id').value, baseUrl, apiKey: $('#provider-api-key').value } });
+    await refreshState({ quiet: true });
+    renderProviderList();
+    if (!visible()) return;
+    $('#provider-models').value = result.modelIds.join('\n');
+    $('#provider-api-key').value = '';
+    updateNineRouterChoices(result.models, result.defaultFreeModel);
+    $('#ninerouter-status').textContent = result.models.length ? 'Connected · models saved automatically' : 'Gateway connected · add an upstream provider';
+    $('#ninerouter-model-summary').hidden = false;
+    $('#ninerouter-model-summary').textContent = result.message;
+    showToast(result.models.length ? `9router connected · ${result.models.length} models loaded.` : result.message);
+  })().catch((error) => { if (visible()) { $('#ninerouter-status').textContent = 'Connection needs attention'; showProviderError(error.message); } }).finally(() => {
+    nineConnectPromise = null;
+    if (visible()) { button.disabled = false; button.textContent = 'Connect & refresh'; }
+  });
+  return nineConnectPromise;
+}
+async function saveNineRouterPreference() {
+  const model = $('#provider-default-free-model').value;
+  if (!model) { $('#ninerouter-use').disabled = true; return; }
+  $('#ninerouter-use').disabled = true;
+  try {
+    await api('/api/9router/default', { method: 'POST', body: { id: $('#provider-id').value, model } });
+    await refreshState({ quiet: true });
+    $('#ninerouter-use').disabled = false;
+    showToast('9router model preference saved.');
+  } catch (error) { showProviderError(error.message); }
 }
 async function openNineRouterDashboard(event) {
   event.preventDefault();
@@ -710,8 +773,8 @@ async function discoverProviderModels() {
       nativePreset: $('#provider-native-preset').value,
     } });
     const current = $('#provider-models').value.split(/[\r\n,]+/).map((item) => item.trim()).filter(Boolean);
-    $('#provider-models').value = (result.codingOnly ? result.modelIds : [...new Set([...current, ...result.modelIds])]).join('\n');
-    if ($('#provider-native-preset').value === '9router') updateNineRouterChoices(result.modelIds);
+    $('#provider-models').value = (result.codingOnly || result.replaceModels ? result.modelIds : [...new Set([...current, ...result.modelIds])]).join('\n');
+    if ($('#provider-native-preset').value === '9router') updateNineRouterChoices(result.models || result.modelIds, result.defaultFreeModel || $('#provider-default-free-model').value);
     showToast(`Loaded ${result.modelIds.length} model IDs.`);
   } catch (error) {
     showProviderError(error.message);
@@ -4983,6 +5046,20 @@ $('#omniroute-start').addEventListener('click', startOmniRoute);
 $('#omniroute-dashboard').addEventListener('click', openOmniRouteDashboard);
 $('#ninerouter-start').addEventListener('click', startNineRouter);
 $('#ninerouter-dashboard').addEventListener('click', openNineRouterDashboard);
+$('#provider-default-free-model').addEventListener('change', saveNineRouterPreference);
+$('#ninerouter-advanced').addEventListener('click', () => {
+  const expanded = $('#ninerouter-advanced').getAttribute('aria-expanded') !== 'true';
+  $('#ninerouter-advanced').setAttribute('aria-expanded', String(expanded));
+  $('#provider-connection-fields').hidden = !expanded;
+  $('#provider-save').hidden = !expanded;
+});
+$('#ninerouter-use').addEventListener('click', () => {
+  const id = `custom:${$('#provider-id').value}:${$('#provider-default-free-model').value}`;
+  const model = state.models.find((item) => item.id === id);
+  if (!model || state.isBusy && state.threadProviderId !== model.providerId) { showToast('Finish or stop the active task before switching providers.'); return; }
+  chooseModel(model);
+  setModal('providers-modal', false);
+});
 $('#provider-base-url').addEventListener('change', () => { if ($('#provider-native-preset').value === '9router') void refreshNineRouter(); });
 $('#provider-models').addEventListener('input', () => {
   if ($('#provider-native-preset').value === '9router') updateNineRouterChoices($('#provider-models').value.split(/[\r\n,]+/).map((id) => id.trim()).filter(Boolean));
@@ -5022,7 +5099,7 @@ $('#choose-default-free').addEventListener('click', () => {
   if (model) { chooseModel(model); return; }
   openProvidersDialog();
   editProvider('9router');
-  showToast('Set up 9router and choose your free model combo to start.');
+  showToast('Click Connect & load models. Your saved free providers are configured automatically.');
 });
 $('#choose-default-paid').addEventListener('click', () => {
   const models = state.models.filter((item) => !item.providerId && /^gpt-6(?:\.1)?-/.test(item.id));
