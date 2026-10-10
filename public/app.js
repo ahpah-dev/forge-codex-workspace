@@ -1114,13 +1114,15 @@ function renderModels() {
     return leftProvider.localeCompare(rightProvider) || left.name.localeCompare(right.name);
   });
   const savedModel = state.models.find((model) => model.id === state.modelId);
+  const previousProvider = !savedModel && state.providers.find(provider=>provider.nativePreset==='flagshiprouter' && state.modelId.startsWith(`custom:${provider.id}:`));
+  const refreshedFlagshipModel = previousProvider && state.models.filter(model=>model.providerId===previousProvider.id && /^oc\/.+-free$/.test(model.providerModel)).sort((a,b)=>b.providerModel.localeCompare(a.providerModel,undefined,{numeric:true}))[0];
   const automaticCodexModel = state.autoModelRouting && (!savedModel || !savedModel.providerId || savedModel.providerId === 'openai') && !/^gpt-6(?:\.1)?-/.test(savedModel?.id || '');
   const automaticDefault = automaticCodexModel ? findGpt6Model('luna') || findGpt6Model('sol') || findGpt6Model('astra') : null;
   const current = automaticCodexModel
     ? automaticDefault
     : gpt6Models.length && savedModel && !savedModel.providerId && !/^gpt-6(?:\.1)?-/.test(savedModel.id)
       ? state.models.find((model) => model.isDefault && /^gpt-6(?:\.1)?-/.test(model.id)) || gpt6Models[0]
-      : savedModel || state.models.find((model) => !model.providerId && model.isDefault) || gpt6Models[0] || state.models.find((model) => !model.providerId) || state.models.find((model) => model.isDefault) || state.models[0];
+      : savedModel || refreshedFlagshipModel || state.models.find((model) => !model.providerId && model.isDefault) || gpt6Models[0] || state.models.find((model) => !model.providerId) || state.models.find((model) => model.isDefault) || state.models[0];
   select.replaceChildren();
   if (!state.models.length) {
     const option = new Option(state.account?.connected ? 'Models unavailable' : 'Connect to choose a model', '');
@@ -3366,7 +3368,7 @@ function handleCodexEvent(event) {
   if (method === 'routing/model/selected') {
     if (params.route.ownerProviderId) {
       if (params.threadId !== state.threadId || params.route.ownerProviderId !== state.threadProviderId) return;
-      const label=`${params.route.fallback ? 'OmniRoute fallback · ' : ''}${params.route.providerName} · ${params.route.name}`;
+      const label=params.route.label || `${params.route.fallback ? 'OmniRoute fallback · ' : ''}${params.route.providerName} · ${params.route.name}`;
       const previous=state.messages.findLast(message=>message.role==='routing' && message.ownerProviderId===params.route.ownerProviderId);
       if(previous?.text===label)return;
       state.messages.push({role:'routing',text:label,ownerProviderId:params.route.ownerProviderId});

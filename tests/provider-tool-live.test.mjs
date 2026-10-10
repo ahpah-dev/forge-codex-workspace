@@ -10,6 +10,7 @@ import { decryptProviderKey, readEncryptedProviderKeys } from '../provider-secre
 import { createOmniRouteRouting, omniRouteFallbacks } from '../omniroute-routing.mjs';
 import { createOmniRouteManager, OMNIROUTE_BASE_URL } from '../omniroute-manager.mjs';
 import { createOmniRouteSync } from '../omniroute-sync.mjs';
+import { createFlagshipRouterRouting } from '../flagshiprouter-routing.mjs';
 
 for (const {providerId,task} of (process.env.FORGE_TOOL_PROVIDER ? [{ providerId: process.env.FORGE_TOOL_PROVIDER, task: process.env.FORGE_TOOL_TASK || 'files' }] : [{providerId:'groq-free',task:'files'},{providerId:'groq-free',task:'chat'},{providerId:'kilo-free-router',task:'files'},{providerId:'omniroute-local',task:'files'}])) test(task==='chat' ? `${providerId} answers a normal native Codex request` : `${providerId} creates and edits real files with over 250 available tools`, { skip: process.env.FORGE_TOOL_LIVE !== '1', timeout: 360000 }, async () => {
   const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -24,6 +25,7 @@ for (const {providerId,task} of (process.env.FORGE_TOOL_PROVIDER ? [{ providerId
   const localGateway=omni?createOmniRouteManager({appRoot:root,dataRoot:path.join(root,'data/omniroute-check')}):null;
   let inferenceRequests=0;const toolCounts=[];
   const fetchImpl = async (url, options) => {
+    if(!options?.body)return fetch(url,options);
     const body=JSON.parse(options.body);inferenceRequests++;toolCounts.push(body.tools?.length || 0);
     if (process.env.FORGE_TOOL_PROVIDER) console.log(JSON.stringify({request:inferenceRequests,tools:body.tools?.map(tool=>tool.function.name)}));
     if(inferenceRequests===1) {assert.ok(JSON.stringify(body.messages).includes('FORGE_PROJECT_RULE_PROBE'));assert.ok(JSON.stringify(body.messages).includes(task==='chat'?'FORGE_CHAT_PROBE':'Actually save both files'));}
@@ -42,7 +44,8 @@ for (const {providerId,task} of (process.env.FORGE_TOOL_PROVIDER ? [{ providerId
   const candidates=()=>omniRouteFallbacks(settings.providers,id=>Boolean(keys[id]),id=>decryptProviderKey(keys[id]),fetchImpl);
   const sync=omni?createOmniRouteSync({manager:localGateway,getCandidates:candidates,baseUrl:()=>`http://127.0.0.1:${server.address().port}`,token:'fixture-local-session'}):null;
   const routing=omni?createOmniRouteRouting({fetchImpl,getFallbacks:candidates,onRoute:route=>{selectedRoutes.push(route);console.log(JSON.stringify({provider:providerId,selectedProvider:route.providerName,selectedModel:route.model,fallback:route.fallback}));}}):null;
-  const makeRouter=()=>omni?routing.forProvider({provider,model,key,ensureGateway:async()=>{await localGateway.start();return sync.configure();}}):createChatProviderRouter({provider,model,key,fetchImpl});
+  const flagship=provider.nativePreset==='flagshiprouter'?createFlagshipRouterRouting({fetchImpl,onRoute:route=>console.log(JSON.stringify({provider:providerId,selected:route.label}))}):null;
+  const makeRouter=()=>omni?routing.forProvider({provider,model,key,ensureGateway:async()=>{await localGateway.start();return sync.configure();}}):flagship?flagship.forProvider({provider,model,key,scopeId:'fixture'}):createChatProviderRouter({provider,model,key,fetchImpl});
   const area = path.join(root, 'data', 'provider-tool-checks');
   await mkdir(area, { recursive: true });
   const workspace = await mkdtemp(path.join(area, 'run-'));

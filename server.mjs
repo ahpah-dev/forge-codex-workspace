@@ -10,13 +10,14 @@ import { promisify } from 'node:util';
 import { decryptProviderKey, encryptProviderKey, readEncryptedProviderKeys, writeEncryptedProviderKeys } from './provider-secrets.mjs';
 import { createAnthropicProvider } from './anthropic-provider.mjs';
 import { createFreeRouter, FREE_PROVIDER_ID, FREE_KEY_IDS, isCodexLimitError, exhaustedCodexLimit } from './free-router.mjs';
-import { bridgeResponses, createChatProviderRouter, providerApiFormat, providerBaseInstructions, GROQ_CODING_MODELS, isGroqProvider, isFlagshipRouterProvider, flagshipRouterModels, KILO_FREE_BASE_URL, KILO_FREE_MODEL } from './responses-bridge.mjs';
+import { bridgeResponses, createChatProviderRouter, providerApiFormat, providerBaseInstructions, GROQ_CODING_MODELS, isGroqProvider, isFlagshipRouterProvider, KILO_FREE_BASE_URL, KILO_FREE_MODEL } from './responses-bridge.mjs';
 import { browserCodexConfig, browserCodexArgs, computerUseInstructions } from './browser-config.mjs';
 import { createOmniRouteManager, isLocalOmniRoute, OMNIROUTE_BASE_URL } from './omniroute-manager.mjs';
 import { createOmniRouteRouting, omniRouteFallbacks } from './omniroute-routing.mjs';
 import { createOmniRouteSync, createGatewaySync } from './omniroute-sync.mjs';
 import { createNineRouterManager, defaultNineRouter, isLocalNineRouter, NINEROUTER_BASE_URL, NINEROUTER_PROVIDER_ID } from './ninerouter-manager.mjs';
 import { nineRouterCatalog } from './ninerouter-catalog.mjs';
+import { createFlagshipRouterRouting } from './flagshiprouter-routing.mjs';
 import './public/question-protocol.js';
 import './public/plugin-protocol.js';
 import './public/file-paths.js';
@@ -30,6 +31,7 @@ const providerKeysPath = path.join(dataRoot, 'provider-secrets.json');
 const providerAuthScript = path.join(appRoot, 'provider-auth.mjs');
 const omniRoute = createOmniRouteManager({ appRoot, dataRoot });
 const nineRouter = createNineRouterManager({ appRoot, dataRoot });
+const flagshipRouting = createFlagshipRouterRouting({onRoute(route){publish({type:'notification',method:'routing/model/selected',params:{threadId:route.scopeId,route}});}});
 const bundledCodexCli = path.join(appRoot, 'node_modules', '@openai', 'codex', 'bin', 'codex.js');
 const codexExecutable = process.env.CODEX_CLI || (existsSync(bundledCodexCli) ? process.execPath : 'codex');
 const codexPrefixArgs = process.env.CODEX_CLI || !existsSync(bundledCodexCli) ? [] : [bundledCodexCli];
@@ -344,6 +346,7 @@ function providerIdFromName(value) {
 function publicProviders(encryptedKeys = {}) {
   const providers = settings.providers.map((provider) => ({
     ...provider,
+    ...(isFlagshipRouterProvider(provider) ? {models:flagshipRouting.filterModels(provider)} : {}),
     authConfigured: isLocalOmniRoute(provider) || isLocalNineRouter(provider) || typeof encryptedKeys[provider.id] === 'string' && Boolean(encryptedKeys[provider.id]),
     ...(provider.id === NINEROUTER_PROVIDER_ID ? { defaultFree: true } : {}),
   }));
@@ -999,6 +1002,7 @@ async function getAppState() {
     getCodexCliVersion(),
     readEncryptedProviderKeys(providerKeysPath),
     anthropic.getStatus(),
+    settings.providers.some(provider=>isFlagshipRouterProvider(provider)&&provider.models.some(model=>model.id.startsWith('oc/'))) ? flagshipRouting.refresh() : Promise.resolve(),
   ]);
   let models = [];
   let limits = null;
@@ -1530,7 +1534,7 @@ async function handleApi(req, res, url) {
         const payload = await response.json();
         const rows = Array.isArray(payload?.data) ? payload.data : Array.isArray(payload?.models) ? payload.models : [];
         if (flagship) {
-          const models = flagshipRouterModels(rows);
+          const models = await flagshipRouting.discover({ ...savedProvider,baseUrl },rows);
           if (!models.length) throw new Error('FlagshipRouter advertises no active models with tool support. Connect a provider in its dashboard, then load models again.');
           return json(res, 200, { models, modelIds: models.map((model) => model.id), replaceModels: true, apiFormat: 'chat', nativePreset: 'flagshiprouter' });
         }
@@ -1846,7 +1850,7 @@ const httpServer = createServer(async (req, res) => {
           const status = await omniRoute.status();
           if (!status.running) await omniRoute.start();
           if (/^auto(?:\/[\w-]+)?:free$/.test(input.model) || input.model==='auto/best-free') return await omniSync.configure();
-        }}) : createChatProviderRouter({ provider: normalizedProvider, model: input.model, key });
+        }}) : isFlagshipRouterProvider(normalizedProvider) ? flagshipRouting.forProvider({provider:normalizedProvider,model:input.model,key,scopeId:requestThreadId || (active.length===1?active[0].threadId:'default')}) : createChatProviderRouter({ provider: normalizedProvider, model: input.model, key });
         if (isLocalNineRouter(normalizedProvider) && input.model === 'forge-auto-free') {
           router.toolLimit = 32; router.toolSchemaBudget = 5000;
         }

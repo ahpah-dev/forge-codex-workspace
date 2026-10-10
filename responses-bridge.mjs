@@ -7,6 +7,18 @@ export const GROQ_CODING_MODELS = ['openai/gpt-oss-120b', 'qwen/qwen3.8-27b', 'o
 export const KILO_FREE_BASE_URL = 'https://api.kilo.ai/api/gateway';
 export const KILO_FREE_MODEL = 'kilo-auto/free';
 export const CHAT_TOOL_LIMIT = 128;
+export function modelAvailabilityError(detail) {
+  let value = detail;
+  for (let depth=0;depth<5;depth++) {
+    const message=typeof value==='string'?value:value?.error?.message || value?.message || '';
+    const start=message.indexOf('{');
+    if(start>=0) { try {value=JSON.parse(message.slice(start));continue;} catch {} }
+    if (/\bmodel\b.{0,200}\b(?:not supported|not found|does not exist|unavailable|does not support this protocol)\b/i.test(message)
+      || ['model_not_found','unsupported_model','ModelProtocolUnsupported'].includes(value?.error?.code || value?.error?.type || value?.code || value?.type)) return String(message).slice(0,500);
+    return null;
+  }
+  return null;
+}
 export function isFlagshipRouterProvider(provider = {}) {
   const identity = String(provider.name || '').replace(/[^a-z0-9]/gi, '').toLowerCase();
   if (provider.nativePreset !== 'flagshiprouter' && !/^flagshiprouter(?:-\d+)?$/.test(provider.id || '') && identity !== 'flagshiprouter') return false;
@@ -481,16 +493,17 @@ export function createChatProviderRouter({ provider, model, key, fetchImpl = fet
       }
       if (!response.ok || response.status === 202) {
         const detail = rejectedDetail || await response.json().catch(() => ({}));
+        const unavailable = modelAvailabilityError(detail);
         const rawExplanation = String(detail.error?.message || detail.message || (typeof detail.detail === 'string' ? detail.detail : ''));
         const explanation = (key ? rawExplanation.replaceAll(key, '[redacted]') : rawExplanation).slice(0, 500);
-        const hint = provider.nativePreset === 'omniroute' && [401, 403, 404, 429, 502, 503].includes(response.status) ? 'Open the local OmniRoute dashboard and check your connected providers, gateway key, and available free models.'
+        const hint = unavailable ? 'This model is unavailable or incompatible with the gateway protocol. Load current models in Manage providers and choose a supported route.' : provider.nativePreset === 'omniroute' && [401, 403, 404, 429, 502, 503].includes(response.status) ? 'Open the local OmniRoute dashboard and check your connected providers, gateway key, and available free models.'
           : [401, 403].includes(response.status) ? 'Check your API key and model access in Settings.'
           : provider.nativePreset === 'kilo-free' && [402, 429, 503].includes(response.status) ? 'Kilo Auto Free is limited or temporarily unavailable. Wait or select another free provider; Forge will not switch this preset to a paid route.'
           : response.status === 429 ? (isGroqProvider(provider) ? 'Groq’s request or token limit was reached. Try a shorter task or a new chat with less context, or wait for your quota to reset. Check your Groq account limits.' : 'The provider rate limit was reached. Wait before retrying.')
             : response.status === 413 && isGroqProvider(provider) ? 'This conversation exceeds Groq’s token allowance. Start a shorter chat or choose a provider with a larger context allowance.'
             : [400, 422].includes(response.status) ? 'Choose a model that supports tool calling and this message type.'
               : response.status === 202 ? 'The provider queued this request instead of returning a live stream. Retry with a streaming model.' : '';
-        throw Object.assign(new Error(`${provider.name} returned HTTP ${response.status}. ${hint}${explanation ? ' ' + explanation : ''}`.trim()), { status: response.status });
+        throw Object.assign(new Error(`${provider.name} returned HTTP ${response.status}. ${hint}${explanation ? ' ' + explanation : ''}`.trim()), { status: response.status, ...(unavailable ? {code:'model_unavailable'} : {}) });
       }
       return { response, route: { provider: provider.id, model, name: model }, maxTokens: body.max_tokens };
     },

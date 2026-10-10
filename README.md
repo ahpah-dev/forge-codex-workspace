@@ -30,7 +30,7 @@ Drop images or files onto the composer, or use its attachment button. Images sho
 
 Download the latest Windows x64 installer from [GitHub Releases](https://github.com/ahpah-dev/forge-codex-workspace/releases/latest). Run the installer, then launch Forge from the Start menu or desktop shortcut. Sign in to Codex once in the Codex app or Codex CLI; Forge uses that saved local account automatically.
 
-To build the installer yourself, use Node.js 24.15 or newer on Windows x64, run `npm install`, then `npm run dist:win`. The installer is written to `release/Forge-Setup-1.0.54-x64.exe`. The desktop app bundles its Codex runtime and does not need a global Node.js install.
+To build the installer yourself, use Node.js 24.15 or newer on Windows x64, run `npm install`, then `npm run dist:win`. The installer is written to `release/Forge-Setup-1.0.55-x64.exe`. The desktop app bundles its Codex runtime and does not need a global Node.js install.
 
 ## Start from source
 
@@ -43,7 +43,7 @@ For local desktop development, run `npm install` and `npm run desktop`. `npm sta
 
 ## Providers and accounts
 
-**FlagshipRouter:** Choose **Manage providers → FlagshipRouter**, use your local gateway URL (default `http://127.0.0.1:20128/v1`) and the key from its Endpoint & Key page, then **Load models** and save. Forge uses its Chat Completions adapter to preserve Codex tool names, namespaces and free-form execution inputs. Catalogs retain up to 500 tool-capable models. Existing local FlagshipRouter connections using Automatic are recognized on startup. Connect upstream accounts in the router dashboard; advertised models still require available access and quota. Forge keeps your saved ChatGPT sign-in.
+**FlagshipRouter:** Choose **Manage providers → FlagshipRouter**, use your local gateway URL (default `http://127.0.0.1:20128/v1`) and the key from its Endpoint & Key page, then **Load models** and save. Forge uses its Chat Completions adapter to preserve Codex tool names, namespaces and free-form execution inputs. Catalogs retain up to 500 tool-capable models. Existing local FlagshipRouter connections using Automatic are recognized on startup. Connect upstream accounts in the router dashboard; advertised models still require available access and quota. Forge keeps your saved ChatGPT sign-in. Stale OpenCode entries are checked against its live public catalog. An unavailable or protocol-incompatible free route can fall back to another current OpenCode free model through the same gateway before output starts; Forge remembers the working route for that chat. Authentication and quota errors are not masked, and partial output is never replayed on another model.
 
 
 **OpenAI / Codex:** Forge reads the connected account's model catalog and usage limits. GPT-6 model availability and rate limits follow the signed-in Codex account and its standard plan allowance.
