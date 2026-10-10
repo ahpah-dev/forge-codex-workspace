@@ -20,6 +20,7 @@ export function modelAvailabilityError(detail) {
   return null;
 }
 export function isFlagshipRouterProvider(provider = {}) {
+  if (!provider || typeof provider !== 'object') return false;
   const identity = String(provider.name || '').replace(/[^a-z0-9]/gi, '').toLowerCase();
   if (provider.nativePreset !== 'flagshiprouter' && !/^flagshiprouter(?:-\d+)?$/.test(provider.id || '') && identity !== 'flagshiprouter') return false;
   try { return ['http:', 'https:'].includes(new URL(provider.baseUrl).protocol) && ['localhost', '127.0.0.1', '[::1]'].includes(new URL(provider.baseUrl).hostname.toLowerCase()); }
