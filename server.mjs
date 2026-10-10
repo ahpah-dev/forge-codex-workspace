@@ -10,7 +10,7 @@ import { promisify } from 'node:util';
 import { decryptProviderKey, encryptProviderKey, readEncryptedProviderKeys, writeEncryptedProviderKeys } from './provider-secrets.mjs';
 import { createAnthropicProvider } from './anthropic-provider.mjs';
 import { createFreeRouter, FREE_PROVIDER_ID, FREE_KEY_IDS, isCodexLimitError, exhaustedCodexLimit } from './free-router.mjs';
-import { bridgeResponses, createChatProviderRouter, providerApiFormat, providerBaseInstructions, GROQ_CODING_MODELS, isGroqProvider, KILO_FREE_BASE_URL, KILO_FREE_MODEL } from './responses-bridge.mjs';
+import { bridgeResponses, createChatProviderRouter, providerApiFormat, providerBaseInstructions, GROQ_CODING_MODELS, isGroqProvider, isFlagshipRouterProvider, flagshipRouterModels, KILO_FREE_BASE_URL, KILO_FREE_MODEL } from './responses-bridge.mjs';
 import { browserCodexConfig, browserCodexArgs, computerUseInstructions } from './browser-config.mjs';
 import { createOmniRouteManager, isLocalOmniRoute, OMNIROUTE_BASE_URL } from './omniroute-manager.mjs';
 import { createOmniRouteRouting, omniRouteFallbacks } from './omniroute-routing.mjs';
@@ -127,8 +127,9 @@ async function loadSettings() {
       name: String(provider.name || provider.id).slice(0, 48),
       baseUrl: String(provider.baseUrl || ''),
       apiFormat: ['auto', 'chat', 'responses'].includes(provider.apiFormat) ? provider.apiFormat : 'auto',
-      ...(['kilo-free', 'omniroute', '9router'].includes(provider.nativePreset) ? { nativePreset: provider.nativePreset } : {}),
-      models: Array.isArray(provider.models) ? provider.models.filter((model) => model && /^[\w./:@+-]{1,180}$/.test(model.id || '')).slice(0, 100).map((model) => ({ id: model.id, name: String(model.name || model.id).slice(0, 180) })) : [],
+      ...(['kilo-free', 'omniroute', '9router', 'flagshiprouter'].includes(provider.nativePreset) ? { nativePreset: provider.nativePreset } : {}),
+      ...(isFlagshipRouterProvider(provider) && provider.apiFormat !== 'responses' ? { nativePreset: 'flagshiprouter', apiFormat: 'chat' } : {}),
+      models: Array.isArray(provider.models) ? provider.models.filter((model) => model && /^[\w./:@+-]{1,180}$/.test(model.id || '')).slice(0, isFlagshipRouterProvider(provider) ? 500 : 100).map((model) => ({ id: model.id, name: String(model.name || model.id).slice(0, 180) })) : [],
       ...(provider.nativePreset === '9router' && /^[\w./:@+-]{1,180}$/.test(provider.defaultFreeModel || '') ? { defaultFreeModel: provider.defaultFreeModel } : {}),
     })) : [];
     if (!providers.some((provider) => provider.id === NINEROUTER_PROVIDER_ID)) providers.unshift(defaultNineRouter());
@@ -317,7 +318,7 @@ function normalizeProviderBaseUrl(value) {
   return `${parsed.origin}${pathname}`;
 }
 
-function normalizeProviderModels(value) {
+function normalizeProviderModels(value, limit = 100) {
   const entries = Array.isArray(value) ? value : String(value || '').split(/[\r\n,]+/);
   const models = [];
   const seen = new Set();
@@ -326,8 +327,8 @@ function normalizeProviderModels(value) {
     if (!id || seen.has(id)) continue;
     if (!/^[\w./:@+-]{1,180}$/.test(id)) throw new Error(`Model ID “${id.slice(0, 45)}” contains unsupported characters.`);
     seen.add(id);
-    models.push({ id, name: id });
-    if (models.length >= 100) break;
+    models.push({ id, name: String(typeof item === 'object' ? item.name || id : id).slice(0, 180) });
+    if (models.length >= limit) break;
   }
   if (!models.length) throw new Error('Add at least one model ID or use Load models.');
   return models;
@@ -1507,6 +1508,9 @@ async function handleApi(req, res, url) {
       if (route === '/api/providers/discover') {
         const baseUrl = normalizeProviderBaseUrl(input.baseUrl);
         if (input.nativePreset === '9router') return json(res, 200, { ...await connectNineRouter({ ...input, baseUrl }), replaceModels: true });
+        const savedProvider = settings.providers.find((provider) => provider.id === input.id);
+        const flagship = isFlagshipRouterProvider({ ...savedProvider, id: input.id, baseUrl, nativePreset: input.nativePreset || savedProvider?.nativePreset });
+        if (input.nativePreset === 'flagshiprouter' && !flagship) throw new Error('Use the local FlagshipRouter gateway address.');
         const kiloFree = input.nativePreset === 'kilo-free';
         const localOmni = isLocalOmniRoute({ nativePreset: input.nativePreset, baseUrl });
         if (input.nativePreset === 'omniroute' && !localOmni) throw new Error('Local OmniRoute must use a loopback HTTP address.');
@@ -1520,11 +1524,16 @@ async function handleApi(req, res, url) {
         if (!apiKey && !localOmni) throw new Error('Enter the provider API key before loading models.');
         const response = await fetch(`${baseUrl}/models`, {
           headers: { ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}), Accept: 'application/json' },
-          signal: AbortSignal.timeout(15000),
+          signal: AbortSignal.timeout(flagship ? 60000 : 15000),
         });
         if (!response.ok) throw new Error(`The provider model list returned HTTP ${response.status}. Check the endpoint and API key.`);
         const payload = await response.json();
         const rows = Array.isArray(payload?.data) ? payload.data : Array.isArray(payload?.models) ? payload.models : [];
+        if (flagship) {
+          const models = flagshipRouterModels(rows);
+          if (!models.length) throw new Error('FlagshipRouter advertises no active models with tool support. Connect a provider in its dashboard, then load models again.');
+          return json(res, 200, { models, modelIds: models.map((model) => model.id), replaceModels: true, apiFormat: 'chat', nativePreset: 'flagshiprouter' });
+        }
         const availableIds = [...new Set(rows.filter((model) => model?.active !== false).map((model) => String(model?.id || model?.name || '').trim()).filter((id) => /^[\w./:@+-]{1,180}$/.test(id)))].sort((a, b) => localOmni ? Number(b.startsWith('auto')) - Number(a.startsWith('auto')) : 0).slice(0, 100);
         const codingOnly = kiloFree || isGroqProvider({ baseUrl });
         const freeAlias = rows.find((model) => model?.id === KILO_FREE_MODEL);
@@ -1546,8 +1555,10 @@ async function handleApi(req, res, url) {
           while (settings.providers.some((provider) => provider.id === id)) id = `${baseId.slice(0, 36)}-${suffix++}`;
         }
         const baseUrl = normalizeProviderBaseUrl(input.baseUrl);
-        const models = normalizeProviderModels(input.models);
-        const nativePreset = ['kilo-free', 'omniroute', '9router'].includes(input.nativePreset) ? input.nativePreset : undefined;
+        const flagship = isFlagshipRouterProvider({ id, name, baseUrl, nativePreset: input.nativePreset || existing?.nativePreset });
+        const models = normalizeProviderModels(input.models, flagship ? 500 : 100);
+        const nativePreset = ['kilo-free', 'omniroute', '9router', 'flagshiprouter'].includes(input.nativePreset) ? input.nativePreset : flagship && input.apiFormat !== 'responses' ? 'flagshiprouter' : undefined;
+        if (nativePreset === 'flagshiprouter' && !flagship) throw new Error('Use the local FlagshipRouter gateway address.');
         if (id === NINEROUTER_PROVIDER_ID && nativePreset !== '9router') throw new Error('The default free provider is reserved for 9router.');
         if (nativePreset === 'kilo-free' && (baseUrl !== KILO_FREE_BASE_URL || models.some((model) => model.id !== KILO_FREE_MODEL))) throw new Error('Kilo Free Router is restricted to the official endpoint and kilo-auto/free.');
         const localOmni = isLocalOmniRoute({ nativePreset, baseUrl });

@@ -413,6 +413,7 @@ function resetProviderForm() {
   $('#provider-key-hint').textContent = 'Stored encrypted on this Windows account';
   $('#provider-models').value = '';
   $('#groq-setup-note').hidden = true;
+  $('#flagship-setup-note').hidden = true;
   $('#provider-form-title').textContent = 'Add a provider';
   $('#provider-save').textContent = 'Add provider';
   $('#provider-cancel-edit').hidden = true;
@@ -565,6 +566,7 @@ function selectProviderPreset(preset) {
     groq: { name: 'Groq Free', baseUrl: 'https://api.groq.com/openai/v1', placeholder: 'gsk_…', models: ['openai/gpt-oss-120b', 'qwen/qwen3.8-27b', 'openai/gpt-oss-20b'] },
     'kilo-free': { name: 'Kilo Free Router', baseUrl: 'https://api.kilo.ai/api/gateway', placeholder: 'Paste your Kilo profile API key', models: ['kilo-auto/free'] },
     omniroute: { name: 'OmniRoute Local', baseUrl: 'http://127.0.0.1:20128/v1', placeholder: 'Optional · key from your OmniRoute dashboard', models: ['auto/coding:free', 'auto/fast:free'] },
+    flagshiprouter: { name: 'FlagshipRouter', baseUrl: 'http://127.0.0.1:20128/v1', placeholder: 'Key from FlagshipRouter’s Endpoint & Key page', models: [] },
     custom: { name: '', baseUrl: '', placeholder: 'Paste provider API key' },
   };
   const value = presets[preset];
@@ -572,16 +574,18 @@ function selectProviderPreset(preset) {
   if (!$('#provider-id').value || preset === 'custom') $('#provider-name').value = value.name;
   $('#provider-base-url').value = value.baseUrl;
   const kiloFree = preset === 'kilo-free';
-  $('#provider-native-preset').value = kiloFree ? 'kilo-free' : preset === 'omniroute' ? 'omniroute' : '';
+  $('#provider-native-preset').value = kiloFree ? 'kilo-free' : ['omniroute', 'flagshiprouter'].includes(preset) ? preset : '';
   $('#omniroute-setup').hidden = preset !== 'omniroute';
   if (preset === 'omniroute') void refreshOmniRoute();
   $('#provider-key-hint').textContent = preset === 'omniroute' ? 'Optional for a local gateway without key authentication' : 'Stored encrypted on this Windows account';
   $('#provider-models').readOnly = kiloFree;
   $('#provider-base-url').readOnly = kiloFree;
-  $('#provider-api-format').disabled = kiloFree || preset === 'omniroute';
+  $('#provider-api-format').disabled = kiloFree || preset === 'omniroute' || preset === 'flagshiprouter';
   $('#kilo-setup-note').hidden = !kiloFree;
-  $('#provider-api-format').value = preset === 'groq' || kiloFree || preset === 'omniroute' ? 'chat' : 'auto';
+  $('#provider-api-format').value = preset === 'groq' || kiloFree || preset === 'omniroute' || preset === 'flagshiprouter' ? 'chat' : 'auto';
   $('#groq-setup-note').hidden = preset !== 'groq';
+  $('#flagship-setup-note').hidden = preset !== 'flagshiprouter';
+  $('#flagship-dashboard').href = 'http://127.0.0.1:20128/dashboard';
   if (value.models) $('#provider-models').value = value.models.join('\n');
   else if (!$('#provider-id').value) $('#provider-models').value = '';
   $('#provider-api-key').placeholder = value.placeholder;
@@ -607,7 +611,7 @@ function editProvider(providerId) {
   if (provider.nativePreset === 'omniroute') void refreshOmniRoute();
   $('#provider-models').readOnly = kiloFree;
   $('#provider-base-url').readOnly = kiloFree;
-  $('#provider-api-format').disabled = kiloFree || provider.nativePreset === 'omniroute' || nine;
+  $('#provider-api-format').disabled = kiloFree || provider.nativePreset === 'omniroute' || provider.nativePreset === 'flagshiprouter' || nine;
   $('#kilo-setup-note').hidden = !kiloFree;
   $('#provider-name').value = provider.name;
   $('#provider-base-url').value = provider.baseUrl;
@@ -620,8 +624,10 @@ function editProvider(providerId) {
   $('#provider-form-title').textContent = `Edit ${provider.name}`;
   $('#provider-save').textContent = 'Save provider';
   $('#provider-cancel-edit').hidden = false;
-  const preset = nine ? '9router' : provider.nativePreset === 'omniroute' ? 'omniroute' : kiloFree ? 'kilo-free' : provider.baseUrl.includes('api.groq.com') ? 'groq' : provider.id.includes('nvidia') ? 'nvidia' : provider.id.includes('openrouter') ? 'openrouter' : 'custom';
+  const preset = nine ? '9router' : provider.nativePreset === 'flagshiprouter' ? 'flagshiprouter' : provider.nativePreset === 'omniroute' ? 'omniroute' : kiloFree ? 'kilo-free' : provider.baseUrl.includes('api.groq.com') ? 'groq' : provider.id.includes('nvidia') ? 'nvidia' : provider.id.includes('openrouter') ? 'openrouter' : 'custom';
   $('#groq-setup-note').hidden = preset !== 'groq';
+  $('#flagship-setup-note').hidden = preset !== 'flagshiprouter';
+  try { $('#flagship-dashboard').href = new URL('/dashboard', provider.baseUrl).href; } catch { /* Saved URLs are validated before use. */ }
   $$('.provider-preset').forEach((button) => button.classList.toggle('selected', button.dataset.providerPreset === preset));
   showProviderError('');
   $('#provider-name').focus();
@@ -774,6 +780,13 @@ async function discoverProviderModels() {
     } });
     const current = $('#provider-models').value.split(/[\r\n,]+/).map((item) => item.trim()).filter(Boolean);
     $('#provider-models').value = (result.codingOnly || result.replaceModels ? result.modelIds : [...new Set([...current, ...result.modelIds])]).join('\n');
+    if (result.nativePreset === 'flagshiprouter') {
+      $('#provider-native-preset').value = result.nativePreset;
+      $('#provider-api-format').value = 'chat';
+      $('#provider-api-format').disabled = true;
+      $('#flagship-setup-note').hidden = false;
+      $('#flagship-dashboard').href = new URL('/dashboard', $('#provider-base-url').value).href;
+    }
     if ($('#provider-native-preset').value === '9router') updateNineRouterChoices(result.models || result.modelIds, result.defaultFreeModel || $('#provider-default-free-model').value);
     showToast(`Loaded ${result.modelIds.length} model IDs.`);
   } catch (error) {

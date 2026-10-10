@@ -11,7 +11,7 @@ import { createOmniRouteRouting, omniRouteFallbacks } from '../omniroute-routing
 import { createOmniRouteManager, OMNIROUTE_BASE_URL } from '../omniroute-manager.mjs';
 import { createOmniRouteSync } from '../omniroute-sync.mjs';
 
-for (const {providerId,task} of [{providerId:'groq-free',task:'files'},{providerId:'groq-free',task:'chat'},{providerId:'kilo-free-router',task:'files'},{providerId:'omniroute-local',task:'files'}]) test(task==='chat' ? `${providerId} GPT-OSS 20B answers a normal native Codex request` : `${providerId} creates and edits real files with over 250 available tools`, { skip: process.env.FORGE_TOOL_LIVE !== '1', timeout: 360000 }, async () => {
+for (const {providerId,task} of (process.env.FORGE_TOOL_PROVIDER ? [{ providerId: process.env.FORGE_TOOL_PROVIDER, task: process.env.FORGE_TOOL_TASK || 'files' }] : [{providerId:'groq-free',task:'files'},{providerId:'groq-free',task:'chat'},{providerId:'kilo-free-router',task:'files'},{providerId:'omniroute-local',task:'files'}])) test(task==='chat' ? `${providerId} answers a normal native Codex request` : `${providerId} creates and edits real files with over 250 available tools`, { skip: process.env.FORGE_TOOL_LIVE !== '1', timeout: 360000 }, async () => {
   const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
   const data = process.env.FORGE_TOOL_DATA || path.join(process.env.APPDATA, 'forge-codex-workspace', 'data');
   const settings = JSON.parse(await readFile(path.join(data, 'settings.json'), 'utf8'));
@@ -20,11 +20,12 @@ for (const {providerId,task} of [{providerId:'groq-free',task:'files'},{provider
   assert.ok(provider, 'Configure this provider in Forge first');
   const keys = await readEncryptedProviderKeys(path.join(data, 'provider-secrets.json'));
   const key = keys[provider.id] ? await decryptProviderKey(keys[provider.id]) : '';
-  const model = omni ? 'auto/coding:free' : providerId === 'groq-free' ? task==='chat' ? 'openai/gpt-oss-20b' : process.env.FORGE_GROQ_CHECK_MODEL || 'openai/gpt-oss-120b' : 'kilo-auto/free';
+  const model = process.env.FORGE_TOOL_MODEL || (omni ? 'auto/coding:free' : providerId === 'groq-free' ? task==='chat' ? 'openai/gpt-oss-20b' : process.env.FORGE_GROQ_CHECK_MODEL || 'openai/gpt-oss-120b' : 'kilo-auto/free');
   const localGateway=omni?createOmniRouteManager({appRoot:root,dataRoot:path.join(root,'data/omniroute-check')}):null;
   let inferenceRequests=0;const toolCounts=[];
   const fetchImpl = async (url, options) => {
     const body=JSON.parse(options.body);inferenceRequests++;toolCounts.push(body.tools?.length || 0);
+    if (process.env.FORGE_TOOL_PROVIDER) console.log(JSON.stringify({request:inferenceRequests,tools:body.tools?.map(tool=>tool.function.name)}));
     if(inferenceRequests===1) {assert.ok(JSON.stringify(body.messages).includes('FORGE_PROJECT_RULE_PROBE'));assert.ok(JSON.stringify(body.messages).includes(task==='chat'?'FORGE_CHAT_PROBE':'Actually save both files'));}
     if(inferenceRequests===1) console.log(JSON.stringify({provider:providerId,outputBudget:body.max_tokens,messageChars:JSON.stringify(body.messages).length,toolChars:JSON.stringify(body.tools).length}));
     assert.ok((body.tools?.length || 0)<=128);
@@ -72,8 +73,10 @@ for (const {providerId,task} of [{providerId:'groq-free',task:'files'},{provider
     }
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const codexEnv = { ...process.env, CODEX_HOME: profile };
+  for (const field of ['CODEX_APP_TOOLS_PIPE_PATH', 'CODEX_INTERNAL_ORIGINATOR_OVERRIDE', 'CODEX_THREAD_ID', 'CODEX_SESSION_ID']) delete codexEnv[field];
   const child = spawn(process.execPath, [path.join(root, 'node_modules/@openai/codex/bin/codex.js'), 'app-server', '--listen', 'stdio://'], {
-    env: { ...process.env, CODEX_HOME: profile }, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'],
+    env: codexEnv, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'],
   });
   let buffer = '', nextId = 1;
   const pending = new Map(), events = [], listeners = new Set();
