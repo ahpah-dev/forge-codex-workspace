@@ -406,6 +406,7 @@ export function createChatProviderRouter({ provider, model, key, fetchImpl = fet
         body: JSON.stringify(body), signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(180000)]) : AbortSignal.timeout(180000),
         }); } catch (error) {
           if (isFlagshipRouterProvider(provider) && error.name === 'TypeError') throw new Error(`FlagshipRouter is not reachable at ${provider.baseUrl}. Start its local gateway and check the address in Model providers.`);
+          if (isFlagshipRouterProvider(provider) && error.name === 'TimeoutError' && !signal?.aborted) throw new DOMException('FlagshipRouter did not respond within 180 seconds. Check its dashboard for upstream availability or quota, then retry or choose another connected route. Previously completed file changes are retained; this timed-out inference executed no new tools.', 'TimeoutError');
           throw error;
         }
       };

@@ -108,3 +108,10 @@ test('FlagshipRouter reports an offline gateway and preserves request cancellati
   const aborted = createChatProviderRouter({ provider, model: 'fixture', key: '', fetchImpl: async () => { throw new DOMException('Cancelled', 'AbortError'); } });
   await assert.rejects(aborted.openCompletion({ messages: [] }), { name: 'AbortError' });
 });
+
+test('FlagshipRouter header timeouts explain recovery without replaying tool calls', async () => {
+  let calls=0;
+  const router=createChatProviderRouter({provider,model:'fixture',key:'',fetchImpl:async()=>{calls++;throw new DOMException('Timed out','TimeoutError');}});
+  await assert.rejects(router.openCompletion({messages:[]}),error=>error.name==='TimeoutError' && /180 seconds.*Previously completed file changes are retained/.test(error.message));
+  assert.equal(calls,1);
+});
